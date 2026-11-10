@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plug.dj Cyber Edition</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        body {
+            background-color: #0b0c10;
+            color: #fff;
+            font-family: sans-serif;
+        }
+
+        .neon-border {
+            box-shadow: 0 0 15px rgba(236, 72, 153, 0.4);
+        }
+
+        .custom-scroll::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .custom-scroll::-webkit-scrollbar-thumb {
+            background: #374151;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        const socket = io();
+
+        function App() {
+            const [user, setUser] = useState(null);
+            const [nameInput, setNameInput] = useState('');
+            const [roomState, setRoomState] = useState({ djQueue: [], messages: [], votes: { woot: 0, meh: 0 } });
+            const [inputMsg, setInputMsg] = useState('');
+            const [playlist, setPlaylist] = useState([]);
+            const [videoUrl, setVideoUrl] = useState('');
+            const chatEndRef = useRef(null);
+
+            useEffect(() => {
+                socket.on('init_state', (state) => setRoomState(state));
+                socket.on('update_room', (state) => setRoomState(state));
+                socket.on('update_votes', (votes) => setRoomState(prev => ({ ...prev, votes })));
+                socket.on('new_message', (msg) => {
+                    setRoomState(prev => ({ ...prev, messages: [...prev.messages, msg] }));
+                });
+                socket.on('user_registered', (u) => setUser(u));
+            }, []);
+
+            useEffect(() => {
+                chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+            }, [roomState.messages]);
+
+            const handleLogin = (e) => {
+                e.preventDefault();
+                if (!nameInput.trim()) return;
+                socket.emit('set_user', { name: nameInput, avatar: '🎧' });
+            };
+
+            const handleSendMessage = (e) => {
+                e.preventDefault();
+                if (!inputMsg.trim()) return;
+                socket.emit('send_message', inputMsg);
+                setInputMsg('');
+            };
+
+            const handleAddSong = (e) => {
+                e.preventDefault();
+                if (!videoUrl) return;
+
+                let videoId = '';
+                if (videoUrl.includes('v=')) videoId = videoUrl.split('v=')[1].split('&')[0];
+                else if (videoUrl.includes('youtu.be/')) videoId = videoUrl.split('youtu.be/')[1].split('?')[0];
+
+                if (videoId) {
+                    const newPlaylist = [...playlist, { id: videoId, title: `Vídeo (${videoId})` }];
+                    setPlaylist(newPlaylist);
+                    socket.emit('update_playlist', newPlaylist);
+                    setVideoUrl('');
+                }
+            };
+
+            const extractVideoId = (url) => {
+                if (!url) return '';
+                if (url.includes('v=')) return url.split('v=')[1].split('&')[0];
+                if (url.includes('youtu.be/')) return url.split('youtu.be/')[1].split('?')[0];
+                return url;
+            };
+
+            if (!user) {
+                return (
+                    <div className="flex h-screen items-center justify-center bg-gray-950">
+                        <form onSubmit={handleLogin} className="bg-gray-900 p-8 rounded-2xl neon-border text-center max-w-sm w-full">
+                            <h1 className="text-3xl font-black text-pink-500 mb-4">PLUG.DJ CLONE</h1>
+                            <input
+                                type="text"
+                                placeholder="Seu Nickname..."
+                                value={nameInput}
+                                onChange={(e) => setNameInput(e.target.value)}
+                                className="w-full bg-gray-800 border border-gray-700 p-3 rounded-lg text-white mb-4 outline-none focus:border-pink-500"
+                            />
+                            <button className="w-full bg-pink-600 hover:bg-pink-500 font-bold p-3 rounded-lg transition">Entrar na Sala</button>
+                        </form>
+                    </div>
+                );
+            }
+
+            const isDjInQueue = roomState.djQueue.some(dj => dj.id === user.id);
+
+            return (
+                <div className="flex h-screen bg-gray-950 text-white overflow-hidden">
+                    <div className="flex-1 flex flex-col p-4 gap-4">
+
+                        <div className="relative aspect-video bg-black rounded-xl overflow-hidden shadow-2xl border border-gray-800 flex items-center justify-center">
+                            {roomState.currentTrack ? (
+                                <iframe
+                                    src={`https://www.youtube.com/embed/${extractVideoId(roomState.currentTrack.id)}?autoplay=1&enablejsapi=1`}
+                                    className="w-full h-full border-none"
+                                    allow="autoplay; encrypted-media"
+                                ></iframe>
+                            ) : (
+                                <div className="text-center text-gray-500">
+                                    <p className="text-xl font-bold">Nenhum DJ tocando no momento</p>
+                                    <p className="text-sm">Adicione músicas e entre na fila!</p>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="bg-gray-900 p-4 rounded-xl flex items-center justify-between border border-gray-800">
+                            <div>
+                                <p className="text-xs text-pink-400 font-semibold uppercase">Tocando Agora</p>
+                                <p className="font-bold text-lg">{roomState.currentTrack?.title || 'Silêncio na Sala'}</p>
+                                <p className="text-xs text-gray-400">DJ: {roomState.currentDj?.name || 'Ninguém'}</p>
+                            </div>
+
+                            <div className="flex items-center gap-3">
+                                <button
+                                    onClick={() => socket.emit('vote', 'woot')}
+                                    className="bg-emerald-600 hover:bg-emerald-500 px-5 py-2.5 rounded-lg font-bold flex items-center gap-2 transition"
+                                >
+                                    👍 Woot ({roomState.votes?.woot || 0})
+                                </button>
+                                <button
+                                    onClick={() => socket.emit('vote', 'meh')}
+                                    className="bg-rose-600 hover:bg-rose-500 px-5 py-2.5 rounded-lg font-bold flex items-center gap-2 transition"
+                                >
+                                    👎 Meh ({roomState.votes?.meh || 0})
+                                </button>
+                                {roomState.currentDj?.id === user.id && (
+                                    <button
+                                        onClick={() => socket.emit('skip_track')}
+                                        className="bg-amber-600 hover:bg-amber-500 px-4 py-2.5 rounded-lg font-bold transition"
+                                    >
+                                        ⏭️ Pular
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4 flex-1">
+                            <div className="bg-gray-900 p-4 rounded-xl border border-gray-800 flex flex-col">
+                                <h3 className="font-bold text-pink-400 mb-2">Minhas Músicas</h3>
+                                <form onSubmit={handleAddSong} className="flex gap-2 mb-3">
+                                    <input
+                                        type="text"
+                                        placeholder="Cole a URL do YouTube"
+                                        value={videoUrl}
+                                        onChange={(e) => setVideoUrl(e.target.value)}
+                                        className="flex-1 bg-gray-800 border border-gray-700 px-3 py-1.5 rounded text-sm outline-none"
+                                    />
+                                    <button className="bg-pink-600 px-3 py-1.5 rounded font-bold text-sm">Add</button>
+                                </form>
+                                <div className="flex-1 overflow-y-auto custom-scroll space-y-2">
+                                    {playlist.map((track, idx) => (
+                                        <div key={idx} className="bg-gray-800 p-2 rounded text-xs truncate">
+                                            {track.title}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div className="bg-gray-900 p-4 rounded-xl border border-gray-800 flex flex-col">
+                                <div className="flex justify-between items-center mb-2">
+                                    <h3 className="font-bold text-cyan-400">Fila de DJs</h3>
+                                    <button
+                                        onClick={() => socket.emit('toggle_queue', playlist)}
+                                        className={`px-3 py-1 rounded text-xs font-bold ${isDjInQueue ? 'bg-red-600' : 'bg-cyan-600'}`}
+                                    >
+                                        {isDjInQueue ? 'Sair da Fila' : 'Entrar na Fila'}
+                                    </button>
+                                </div>
+                                <div className="flex-1 overflow-y-auto custom-scroll space-y-2">
+                                    {roomState.djQueue.map((dj, idx) => (
+                                        <div key={idx} className="bg-gray-800 p-2 rounded text-xs flex justify-between items-center">
+                                            <span>{idx + 1}. {dj.name}</span>
+                                            <span className="text-gray-400">{dj.playlist?.length || 0} músicas</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+
+                    <div className="w-80 bg-gray-900 border-l border-gray-800 flex flex-col">
+                        <div className="p-4 border-b border-gray-800">
+                            <h2 className="font-bold text-lg">Chat da Sala</h2>
+                        </div>
+
+                        <div className="flex-1 p-4 overflow-y-auto custom-scroll space-y-3">
+                            {roomState.messages.map((msg) => (
+                                <div key={msg.id} className="text-xs">
+                                    <span className="font-bold text-pink-400">{msg.user}: </span>
+                                    <span className="text-gray-200">{msg.text}</span>
+                                    <span className="block text-[10px] text-gray-500">{msg.time}</span>
+                                </div>
+                            ))}
+                            <div ref={chatEndRef} />
+                        </div>
+
+                        <form onSubmit={handleSendMessage} className="p-4 border-t border-gray-800 flex gap-2">
+                            <input
+                                type="text"
+                                placeholder="Digite sua mensagem..."
+                                value={inputMsg}
+                                onChange={(e) => setInputMsg(e.target.value)}
+                                className="flex-1 bg-gray-800 border border-gray-700 p-2 rounded text-xs outline-none focus:border-pink-500"
+                            />
+                            <button className="bg-pink-600 p-2 rounded text-xs font-bold">Enviar</button>
+                        </form>
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+
+</html>

@@ -91,11 +91,28 @@
         // =========================================================================
         // COMPONENTE DO PLAYER COM CONTROLE EXCLUSIVO DO DJ E AUTO-RESYNC
         // =========================================================================
-        function VideoPlayer({ currentTrack, isPlaying, isCurrentDj, onTrackEnded, onRegisterSync }) {
+        function VideoPlayer({ currentTrack, isPlaying, isCurrentDj, volume = 100, isMuted = false, onTrackEnded, onRegisterSync }) {
             const playerContainerRef = useRef(null);
             const ytPlayerRef = useRef(null);
             const isReadyRef = useRef(false);
             const [audioBlocked, setAudioBlocked] = useState(false);
+
+            // Ajusta o volume e o mudo no YouTube Player localmente
+            useEffect(() => {
+                const player = ytPlayerRef.current;
+                if (!player || !isReadyRef.current) return;
+
+                try {
+                    if (isMuted) {
+                        player.mute();
+                    } else {
+                        player.unMute();
+                        player.setVolume(volume);
+                    }
+                } catch (err) {
+                    console.warn('[Volume] Falha ao ajustar volume:', err);
+                }
+            }, [volume, isMuted]);
 
             // Função precisa de sincronização (seekTo + play/pause)
             const syncTo = useCallback((targetTime, targetIsPlaying) => {
@@ -191,6 +208,12 @@
                                     socket.emit('request_sync');
 
                                     try {
+                                        if (isMuted) {
+                                            e.target.mute();
+                                        } else {
+                                            e.target.unMute();
+                                            e.target.setVolume(volume);
+                                        }
                                         if (isPlaying) {
                                             e.target.playVideo();
                                         } else {
@@ -236,7 +259,10 @@
                 setAudioBlocked(false);
                 if (ytPlayerRef.current) {
                     try {
-                        ytPlayerRef.current.unMute();
+                        if (!isMuted) {
+                            ytPlayerRef.current.unMute();
+                            ytPlayerRef.current.setVolume(volume);
+                        }
                         ytPlayerRef.current.playVideo();
                         socket.emit('request_sync');
                     } catch (e) {}
@@ -301,6 +327,26 @@
             const [unreadCount, setUnreadCount] = useState(0);
             const [draggedIndex, setDraggedIndex] = useState(null);
             const [dragOverIndex, setDragOverIndex] = useState(null);
+
+            // Controle de Volume e Mudo local (liberado para todos os usuários)
+            const [volume, setVolume] = useState(() => {
+                const saved = localStorage.getItem('vibedj_volume');
+                return saved !== null ? parseInt(saved, 10) : 100;
+            });
+            const [isMuted, setIsMuted] = useState(false);
+
+            const handleVolumeChange = (e) => {
+                const newVol = parseInt(e.target.value, 10);
+                setVolume(newVol);
+                if (newVol > 0 && isMuted) {
+                    setIsMuted(false);
+                }
+                localStorage.setItem('vibedj_volume', newVol);
+            };
+
+            const handleToggleMute = () => {
+                setIsMuted(prev => !prev);
+            };
 
             const chatEndRef = useRef(null);
             const mobileTabRef = useRef('sala');
@@ -728,6 +774,8 @@
                                     currentTrack={roomState.currentTrack}
                                     isPlaying={roomState.isPlaying}
                                     isCurrentDj={isCurrentDj}
+                                    volume={volume}
+                                    isMuted={isMuted}
                                     onTrackEnded={handleTrackEnded}
                                     onRegisterSync={handleRegisterSync}
                                 />
@@ -790,6 +838,30 @@
                                             </button>
                                         </div>
                                     )}
+
+                                    {/* CONTROLE DE VOLUME LOCAL (Liberado para TODOS: ouvintes e DJ) */}
+                                    <div className="flex items-center gap-1.5 bg-gray-800/80 px-2.5 py-1.5 rounded-lg border border-gray-700/80">
+                                        <button
+                                            type="button"
+                                            onClick={handleToggleMute}
+                                            title={isMuted ? "Desativar Mudo" : "Mutar Áudio"}
+                                            className="text-gray-300 hover:text-white transition text-xs flex items-center justify-center p-0.5 active:scale-95"
+                                        >
+                                            {isMuted || volume === 0 ? '🔇' : volume < 50 ? '🔉' : '🔊'}
+                                        </button>
+                                        <input
+                                            type="range"
+                                            min="0"
+                                            max="100"
+                                            value={isMuted ? 0 : volume}
+                                            onChange={handleVolumeChange}
+                                            title={`Volume: ${isMuted ? 'Mudo' : volume + '%'}`}
+                                            className="w-16 sm:w-20 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-pink-500"
+                                        />
+                                        <span className="text-[10px] text-gray-400 font-mono w-7 text-right">
+                                            {isMuted ? '0%' : `${volume}%`}
+                                        </span>
+                                    </div>
 
                                     {/* Botões de Votação (Para todos os participantes) */}
                                     <button

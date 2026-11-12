@@ -349,10 +349,11 @@ function nextTrack() {
         roomState.djQueue.push(dj);
 
         if (dj.playlist && dj.playlist.length > 0) {
-            // Pega a PRIMEIRA faixa (topo) e REMOVE da playlist pessoal do DJ ao entrar no palco
+            // Pega a PRIMEIRA faixa (topo) e move para o final da playlist pessoal do DJ (rotação circular)
             const track = dj.playlist.shift();
+            dj.playlist.push(track);
 
-            // Notifica o socket do DJ para atualizar sua playlist no front-end em tempo real
+            // Notifica o socket do DJ para sincronizar a rotação circular no front-end em tempo real
             Array.from(io.sockets.sockets.values())
                 .filter(s => (s.data.user && s.data.user.name === dj.name) || s.id === dj.id)
                 .forEach(s => s.emit('playlist_consumed', dj.playlist));

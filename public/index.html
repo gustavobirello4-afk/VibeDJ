@@ -299,6 +299,8 @@
             const [isAddingTrack, setIsAddingTrack] = useState(false);
             const [mobileTab, setMobileTab] = useState('sala'); // 'sala' ou 'chat'
             const [unreadCount, setUnreadCount] = useState(0);
+            const [draggedIndex, setDraggedIndex] = useState(null);
+            const [dragOverIndex, setDragOverIndex] = useState(null);
 
             const chatEndRef = useRef(null);
             const mobileTabRef = useRef('sala');
@@ -395,6 +397,15 @@
                     }
                 };
 
+                // Notificação de faixa consumida pelo servidor quando o DJ entra no palco
+                const onPlaylistConsumed = (updatedPlaylist) => {
+                    console.log('[Playlist] Faixa consumida pela mesa. Nova playlist:', updatedPlaylist);
+                    if (Array.isArray(updatedPlaylist)) {
+                        setPlaylist(updatedPlaylist);
+                        localStorage.setItem('vibedj_playlist', JSON.stringify(updatedPlaylist));
+                    }
+                };
+
                 socket.on('connect', onConnect);
                 socket.on('disconnect', onDisconnect);
                 socket.on('connect_error', onConnectError);
@@ -405,6 +416,7 @@
                 socket.on('user_registered', onUserRegistered);
                 socket.on('sync_time', onSyncTime);
                 socket.on('player_action', onPlayerAction);
+                socket.on('playlist_consumed', onPlaylistConsumed);
 
                 if (socket.connected) {
                     onConnect();
@@ -421,6 +433,7 @@
                     socket.off('user_registered', onUserRegistered);
                     socket.off('sync_time', onSyncTime);
                     socket.off('player_action', onPlayerAction);
+                    socket.off('playlist_consumed', onPlaylistConsumed);
                 };
             }, []);
 
@@ -523,11 +536,68 @@
                     setIsAddingTrack(false);
                 }
 
-                const newPlaylist = [...playlist, { id: videoId, title }];
+                // Insere diretamente na PRIMEIRA posição (índice 0 / Topo da lista)
+                const newPlaylist = [{ id: videoId, title }, ...playlist];
                 setPlaylist(newPlaylist);
                 localStorage.setItem('vibedj_playlist', JSON.stringify(newPlaylist));
                 socket.emit('update_playlist', newPlaylist);
                 setVideoUrl('');
+            };
+
+            // Reordenação por setas (▲ / ▼) para celular e computador
+            const handleMoveSong = (index, direction) => {
+                const targetIndex = index + direction;
+                if (targetIndex < 0 || targetIndex >= playlist.length) return;
+
+                const newPlaylist = [...playlist];
+                const [moved] = newPlaylist.splice(index, 1);
+                newPlaylist.splice(targetIndex, 0, moved);
+
+                setPlaylist(newPlaylist);
+                localStorage.setItem('vibedj_playlist', JSON.stringify(newPlaylist));
+                socket.emit('update_playlist', newPlaylist);
+            };
+
+            // Reordenação por Arrastar e Soltar (Drag and Drop) no computador
+            const handleDragStart = (e, index) => {
+                setDraggedIndex(index);
+                e.dataTransfer.effectAllowed = 'move';
+                try {
+                    e.dataTransfer.setData('text/plain', index);
+                } catch (err) {}
+            };
+
+            const handleDragOver = (e, index) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                if (dragOverIndex !== index) {
+                    setDragOverIndex(index);
+                }
+            };
+
+            const handleDrop = (e, targetIndex) => {
+                e.preventDefault();
+                if (draggedIndex === null || draggedIndex === targetIndex) {
+                    setDraggedIndex(null);
+                    setDragOverIndex(null);
+                    return;
+                }
+
+                const newPlaylist = [...playlist];
+                const [moved] = newPlaylist.splice(draggedIndex, 1);
+                newPlaylist.splice(targetIndex, 0, moved);
+
+                setPlaylist(newPlaylist);
+                localStorage.setItem('vibedj_playlist', JSON.stringify(newPlaylist));
+                socket.emit('update_playlist', newPlaylist);
+
+                setDraggedIndex(null);
+                setDragOverIndex(null);
+            };
+
+            const handleDragEnd = () => {
+                setDraggedIndex(null);
+                setDragOverIndex(null);
             };
 
             const handleRemoveSong = (indexToRemove) => {
@@ -769,20 +839,93 @@
                                                 Nenhuma música na sua playlist ainda.
                                             </p>
                                         ) : (
-                                            playlist.map((track, idx) => (
-                                                <div key={idx} className="bg-gray-800 hover:bg-gray-750 p-2 rounded-lg text-xs flex justify-between items-center group">
-                                                    <span className="truncate pr-2 font-medium" title={track.title}>
-                                                        {idx + 1}. {track.title}
-                                                    </span>
-                                                    <button
-                                                        onClick={() => handleRemoveSong(idx)}
-                                                        className="text-gray-500 hover:text-red-400 transition text-xs font-bold px-1"
-                                                        title="Remover"
+                                            playlist.map((track, idx) => {
+                                                const isTop = idx === 0;
+                                                const isDragging = draggedIndex === idx;
+                                                const isOver = dragOverIndex === idx;
+
+                                                return (
+                                                    <div
+                                                        key={(track.id || idx) + '-' + idx}
+                                                        draggable
+                                                        onDragStart={(e) => handleDragStart(e, idx)}
+                                                        onDragOver={(e) => handleDragOver(e, idx)}
+                                                        onDrop={(e) => handleDrop(e, idx)}
+                                                        onDragEnd={handleDragEnd}
+                                                        className={`p-2 rounded-lg text-xs flex items-center justify-between gap-2 transition select-none group ${
+                                                            isDragging
+                                                                ? 'opacity-40 border-2 border-dashed border-pink-500 bg-gray-800/50'
+                                                                : isOver
+                                                                ? 'border-t-2 border-cyan-400 bg-gray-750'
+                                                                : isTop
+                                                                ? 'bg-gray-800 border border-pink-500/40 shadow-sm'
+                                                                : 'bg-gray-800/80 hover:bg-gray-800'
+                                                        }`}
                                                     >
-                                                        ✕
-                                                    </button>
-                                                </div>
-                                            ))
+                                                        {/* Alça de Arrastar no Desktop */}
+                                                        <span
+                                                            className="text-gray-500 hover:text-gray-300 cursor-grab active:cursor-grabbing text-xs px-0.5 hidden sm:inline shrink-0"
+                                                            title="Clique e arraste para reordenar"
+                                                        >
+                                                            ⠿
+                                                        </span>
+
+                                                        {/* Posição / Título */}
+                                                        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                                                            {isTop ? (
+                                                                <span
+                                                                    className="bg-pink-600/30 text-pink-400 border border-pink-500/40 text-[9px] font-black px-1.5 py-0.5 rounded uppercase tracking-wider shrink-0"
+                                                                    title="Próxima faixa a tocar quando chegar sua vez"
+                                                                >
+                                                                    1º Topo
+                                                                </span>
+                                                            ) : (
+                                                                <span className="text-gray-400 font-bold text-[11px] shrink-0 w-4 text-center">
+                                                                    {idx + 1}.
+                                                                </span>
+                                                            )}
+                                                            <span className="truncate font-medium text-gray-200" title={track.title}>
+                                                                {track.title}
+                                                            </span>
+                                                        </div>
+
+                                                        {/* Ações: Setas (▲ / ▼) e Remover (✕) */}
+                                                        <div className="flex items-center gap-0.5 shrink-0">
+                                                            {/* Seta para Cima */}
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleMoveSong(idx, -1)}
+                                                                disabled={idx === 0}
+                                                                title="Mover para cima"
+                                                                className="p-1 rounded hover:bg-gray-700 text-gray-400 hover:text-cyan-400 disabled:opacity-20 disabled:hover:text-gray-400 disabled:hover:bg-transparent transition text-xs font-bold"
+                                                            >
+                                                                ▲
+                                                            </button>
+
+                                                            {/* Seta para Baixo */}
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleMoveSong(idx, 1)}
+                                                                disabled={idx === playlist.length - 1}
+                                                                title="Mover para baixo"
+                                                                className="p-1 rounded hover:bg-gray-700 text-gray-400 hover:text-cyan-400 disabled:opacity-20 disabled:hover:text-gray-400 disabled:hover:bg-transparent transition text-xs font-bold"
+                                                            >
+                                                                ▼
+                                                            </button>
+
+                                                            {/* Remover Música */}
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => handleRemoveSong(idx)}
+                                                                title="Remover da playlist"
+                                                                className="p-1 rounded hover:bg-gray-700 text-gray-400 hover:text-red-400 transition text-xs font-bold ml-0.5"
+                                                            >
+                                                                ✕
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })
                                         )}
                                     </div>
                                 </div>

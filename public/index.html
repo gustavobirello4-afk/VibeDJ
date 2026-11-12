@@ -11,7 +11,9 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Socket.IO Client (CDN com fallback local) -->
+    <!-- YouTube IFrame Player API -->
+    <script src="https://www.youtube.com/iframe_api"></script>
+    <!-- Socket.IO Client (CDN oficial com fallback local) -->
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
     <script>
         if (typeof io === 'undefined') {
@@ -52,9 +54,9 @@
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect, useRef } = React;
+        const { useState, useEffect, useRef, useCallback } = React;
 
-        // Configuração de conexão do Socket.IO para nuvem (Render)
+        // Configuração do Socket.IO com suporte nativo a WebSocket na nuvem (Render)
         const socket = io({
             transports: ['websocket', 'polling'],
             reconnection: true,
@@ -63,7 +65,7 @@
             timeout: 20000
         });
 
-        // Função robusta de extração de ID do YouTube (links normais, celular, Shorts, youtu.be)
+        // Extrai o ID de 11 caracteres de qualquer URL do YouTube
         function extractVideoId(url) {
             if (!url) return '';
             const clean = url.trim();
@@ -78,20 +80,236 @@
             return '';
         }
 
+        // Formata segundos em MM:SS
+        function formatTime(seconds) {
+            if (isNaN(seconds) || seconds < 0) return '00:00';
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        // =========================================================================
+        // COMPONENTE DO PLAYER COM CONTROLE EXCLUSIVO DO DJ E AUTO-RESYNC
+        // =========================================================================
+        function VideoPlayer({ currentTrack, isPlaying, isCurrentDj, onTrackEnded, onRegisterSync }) {
+            const playerContainerRef = useRef(null);
+            const ytPlayerRef = useRef(null);
+            const isReadyRef = useRef(false);
+            const [audioBlocked, setAudioBlocked] = useState(false);
+
+            // Função precisa de sincronização (seekTo + play/pause)
+            const syncTo = useCallback((targetTime, targetIsPlaying) => {
+                const player = ytPlayerRef.current;
+                if (!player || !isReadyRef.current) return;
+
+                try {
+                    const currentTime = typeof player.getCurrentTime === 'function' ? player.getCurrentTime() : 0;
+                    const playerState = typeof player.getPlayerState === 'function' ? player.getPlayerState() : -1;
+                    const drift = Math.abs(currentTime - targetTime);
+
+                    // Se houver um desvio maior que 1.5s, reposiciona a agulha no segundo exato
+                    if (drift > 1.5) {
+                        console.log(`[Resync] Ajustando player: local ${currentTime.toFixed(1)}s -> servidor ${targetTime.toFixed(1)}s (desvio: ${drift.toFixed(1)}s)`);
+                        player.seekTo(targetTime, true);
+                    }
+
+                    // Sincroniza o estado de reprodução (1 = PLAYING, 2 = PAUSED)
+                    if (targetIsPlaying) {
+                        if (playerState !== 1) {
+                            const p = player.playVideo();
+                            if (p && typeof p.catch === 'function') {
+                                p.catch(() => setAudioBlocked(true));
+                            }
+                        }
+                    } else {
+                        if (playerState === 1) {
+                            player.pauseVideo();
+                        }
+                    }
+                } catch (err) {
+                    console.warn('[Sync] Falha na sincronização do player:', err);
+                }
+            }, []);
+
+            // Registra o manipulador de sincronização para ser acionado por visibilitychange e eventos de socket
+            useEffect(() => {
+                if (onRegisterSync) {
+                    onRegisterSync(syncTo);
+                }
+            }, [onRegisterSync, syncTo]);
+
+            // Inicialização do Player com a YouTube IFrame API
+            useEffect(() => {
+                if (!currentTrack || !currentTrack.id) {
+                    if (ytPlayerRef.current && typeof ytPlayerRef.current.destroy === 'function') {
+                        try { ytPlayerRef.current.destroy(); } catch (e) {}
+                        ytPlayerRef.current = null;
+                        isReadyRef.current = false;
+                    }
+                    return;
+                }
+
+                let isMounted = true;
+                isReadyRef.current = false;
+
+                const initPlayer = () => {
+                    if (!isMounted) return;
+
+                    if (!window.YT || !window.YT.Player) {
+                        setTimeout(initPlayer, 200);
+                        return;
+                    }
+
+                    if (playerContainerRef.current) {
+                        playerContainerRef.current.innerHTML = '<div id="yt-player-target" class="w-full h-full"></div>';
+                    }
+
+                    try {
+                        ytPlayerRef.current = new window.YT.Player('yt-player-target', {
+                            videoId: currentTrack.id,
+                            width: '100%',
+                            height: '100%',
+                            playerVars: {
+                                autoplay: 1,
+                                // Ouvintes não recebem controles nativos nem atalhos de teclado do YouTube
+                                controls: isCurrentDj ? 1 : 0,
+                                disablekb: isCurrentDj ? 0 : 1,
+                                fs: isCurrentDj ? 1 : 0,
+                                enablejsapi: 1,
+                                playsinline: 1,
+                                rel: 0,
+                                modestbranding: 1,
+                                origin: window.location.origin
+                            },
+                            events: {
+                                onReady: (e) => {
+                                    if (!isMounted) return;
+                                    isReadyRef.current = true;
+                                    console.log('[Player] YouTube Player carregado e pronto.');
+
+                                    // Solicita imediatamente a posição e estado da sala ao carregar
+                                    socket.emit('request_sync');
+
+                                    try {
+                                        if (isPlaying) {
+                                            e.target.playVideo();
+                                        } else {
+                                            e.target.pauseVideo();
+                                        }
+                                    } catch (err) {
+                                        setAudioBlocked(true);
+                                    }
+                                },
+                                onStateChange: (e) => {
+                                    // 0 = YT.PlayerState.ENDED
+                                    if (e.data === 0) {
+                                        console.log('[Player] Música finalizada.');
+                                        if (onTrackEnded) onTrackEnded();
+                                    }
+                                },
+                                onError: (err) => {
+                                    console.warn('[Player] Erro no player do YouTube:', err);
+                                }
+                            }
+                        });
+                    } catch (e) {
+                        console.error('[Player] Erro ao instanciar YT.Player:', e);
+                    }
+                };
+
+                initPlayer();
+
+                return () => {
+                    isMounted = false;
+                    isReadyRef.current = false;
+                    if (ytPlayerRef.current && typeof ytPlayerRef.current.destroy === 'function') {
+                        try {
+                            ytPlayerRef.current.destroy();
+                        } catch (e) {}
+                        ytPlayerRef.current = null;
+                    }
+                };
+            }, [currentTrack?.id, isCurrentDj]);
+
+            // Desbloqueia áudio caso o navegador móvel restrinja autoplay
+            const handleUnlockAudio = () => {
+                setAudioBlocked(false);
+                if (ytPlayerRef.current) {
+                    try {
+                        ytPlayerRef.current.unMute();
+                        ytPlayerRef.current.playVideo();
+                        socket.emit('request_sync');
+                    } catch (e) {}
+                }
+            };
+
+            if (!currentTrack) {
+                return (
+                    <div className="text-center text-gray-500 p-4">
+                        <div className="text-3xl mb-2">📻</div>
+                        <p className="text-lg font-bold text-gray-300">Nenhum DJ tocando agora</p>
+                        <p className="text-xs text-gray-500">Adicione suas músicas e entre na fila para assumir a mesa!</p>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="relative w-full h-full">
+                    {/* Alvo do Player do YouTube */}
+                    <div ref={playerContainerRef} className="w-full h-full"></div>
+
+                    {/* CAMADA DE PROTEÇÃO CONTRA CLIQUES DE OUVINTES (Requisito 1) */}
+                    {!isCurrentDj && (
+                        <div
+                            className="absolute inset-0 z-10 bg-transparent cursor-default select-none"
+                            title="Reprodução sincronizada. Apenas o DJ atual pode pausar ou alterar o vídeo."
+                            onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                            }}
+                        />
+                    )}
+
+                    {/* Aviso de desbloqueio de áudio em celulares */}
+                    {audioBlocked && (
+                        <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/75 p-4">
+                            <button
+                                onClick={handleUnlockAudio}
+                                className="bg-pink-600 hover:bg-pink-500 text-white font-bold py-2.5 px-5 rounded-xl shadow-lg shadow-pink-600/40 animate-pulse flex items-center gap-2 text-sm transition"
+                            >
+                                🔊 Toque para Ativar o Áudio da Sala
+                            </button>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // =========================================================================
+        // APLICAÇÃO PRINCIPAL
+        // =========================================================================
         function App() {
             const [isConnected, setIsConnected] = useState(socket.connected);
             const [user, setUser] = useState(null);
             const [nameInput, setNameInput] = useState('');
-            const [roomState, setRoomState] = useState({ djQueue: [], messages: [], votes: { woot: 0, meh: 0 } });
+            const [roomState, setRoomState] = useState({ djQueue: [], messages: [], votes: { woot: 0, meh: 0 }, isPlaying: false, currentTime: 0 });
             const [inputMsg, setInputMsg] = useState('');
             const [playlist, setPlaylist] = useState([]);
             const [videoUrl, setVideoUrl] = useState('');
-            const [mobileTab, setMobileTab] = useState('sala'); // 'sala' ou 'chat' no celular
+            const [isAddingTrack, setIsAddingTrack] = useState(false);
+            const [mobileTab, setMobileTab] = useState('sala'); // 'sala' ou 'chat'
             const [unreadCount, setUnreadCount] = useState(0);
 
             const chatEndRef = useRef(null);
             const mobileTabRef = useRef('sala');
             mobileTabRef.current = mobileTab;
+
+            // Ref para a função de sincronização do player ativo
+            const syncPlayerFnRef = useRef(null);
+
+            const handleRegisterSync = useCallback((syncFn) => {
+                syncPlayerFnRef.current = syncFn;
+            }, []);
 
             // Carrega dados salvos no localStorage (nome e playlist)
             useEffect(() => {
@@ -105,11 +323,11 @@
                         if (Array.isArray(parsed)) setPlaylist(parsed);
                     }
                 } catch (e) {
-                    console.error("Erro ao carregar playlist do localStorage:", e);
+                    console.error("Erro ao carregar playlist salva:", e);
                 }
             }, []);
 
-            // Gerencia eventos de conexão e do jogo
+            // Gerencia eventos de conexão e atualização do Socket.IO
             useEffect(() => {
                 const onConnect = () => {
                     console.log('[VibeDJ] Conectado ao servidor! Socket ID:', socket.id);
@@ -120,6 +338,7 @@
                     if (savedName) {
                         socket.emit('set_user', { name: savedName, avatar: '🎧' });
                     }
+                    socket.emit('request_sync');
                 };
 
                 const onDisconnect = (reason) => {
@@ -133,8 +352,10 @@
                 };
 
                 const onInitState = (state) => {
-                    console.log('[VibeDJ] Estado inicial recebido:', state);
                     setRoomState(state);
+                    if (syncPlayerFnRef.current && state.currentTrack) {
+                        syncPlayerFnRef.current(state.currentTime || 0, state.isPlaying);
+                    }
                 };
 
                 const onUpdateRoom = (state) => {
@@ -153,9 +374,25 @@
                 };
 
                 const onUserRegistered = (u) => {
-                    console.log('[VibeDJ] Usuário registrado com sucesso:', u);
                     setUser(u);
                     localStorage.setItem('vibedj_user_name', u.name);
+                };
+
+                // Resposta de sincronização recebida do servidor
+                const onSyncTime = (data) => {
+                    console.log('[Sync] Resposta de tempo recebida:', data);
+                    if (syncPlayerFnRef.current) {
+                        syncPlayerFnRef.current(data.currentTime, data.isPlaying);
+                    }
+                };
+
+                // Comando de controle imediato disparado pelo DJ (play/pause/seek)
+                const onPlayerAction = (data) => {
+                    console.log('[PlayerAction] Ação executada pelo DJ:', data);
+                    setRoomState(prev => ({ ...prev, isPlaying: data.isPlaying, currentTime: data.currentTime }));
+                    if (syncPlayerFnRef.current) {
+                        syncPlayerFnRef.current(data.currentTime, data.isPlaying);
+                    }
                 };
 
                 socket.on('connect', onConnect);
@@ -166,6 +403,8 @@
                 socket.on('update_votes', onUpdateVotes);
                 socket.on('new_message', onNewMessage);
                 socket.on('user_registered', onUserRegistered);
+                socket.on('sync_time', onSyncTime);
+                socket.on('player_action', onPlayerAction);
 
                 if (socket.connected) {
                     onConnect();
@@ -180,15 +419,50 @@
                     socket.off('update_votes', onUpdateVotes);
                     socket.off('new_message', onNewMessage);
                     socket.off('user_registered', onUserRegistered);
+                    socket.off('sync_time', onSyncTime);
+                    socket.off('player_action', onPlayerAction);
                 };
             }, []);
 
-            // Scroll automático para a última mensagem do chat
+            // =========================================================================
+            // SINCRONIZAÇÃO EM TEMPO REAL: VISIBILITYCHANGE E FOCO DE TELA (Requisito 2)
+            // =========================================================================
+            useEffect(() => {
+                const handleVisibilityChange = () => {
+                    // Quando o usuário volta ao browser após alternar para WhatsApp ou outro app
+                    if (document.visibilityState === 'visible') {
+                        console.log('[Visibilidade] Usuário retornou à aba. Solicitando sincronização imediata...');
+                        socket.emit('request_sync');
+                    }
+                };
+
+                const handleWindowFocus = () => {
+                    console.log('[Foco] Janela em foco. Solicitando ressincronização...');
+                    socket.emit('request_sync');
+                };
+
+                document.addEventListener('visibilitychange', handleVisibilityChange);
+                window.addEventListener('focus', handleWindowFocus);
+
+                // Polling suave de verificação de drift a cada 5 segundos
+                const intervalId = setInterval(() => {
+                    if (document.visibilityState === 'visible') {
+                        socket.emit('request_sync');
+                    }
+                }, 5000);
+
+                return () => {
+                    document.removeEventListener('visibilitychange', handleVisibilityChange);
+                    window.removeEventListener('focus', handleWindowFocus);
+                    clearInterval(intervalId);
+                };
+            }, []);
+
+            // Scroll automático no chat
             useEffect(() => {
                 chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
             }, [roomState.messages, mobileTab]);
 
-            // Se o usuário mudar para a aba de chat, zera contador de não lidas
             const handleSwitchTab = (tab) => {
                 setMobileTab(tab);
                 if (tab === 'chat') {
@@ -222,17 +496,34 @@
                 setInputMsg('');
             };
 
-            const handleAddSong = (e) => {
+            const handleAddSong = async (e) => {
                 e.preventDefault();
-                if (!videoUrl) return;
+                if (!videoUrl || isAddingTrack) return;
 
                 const videoId = extractVideoId(videoUrl);
                 if (!videoId) {
-                    alert('URL do YouTube inválida! Por favor, cole um link de vídeo ou Shorts.');
+                    alert('URL do YouTube inválida! Por favor, cole um link de vídeo ou Shorts válido.');
                     return;
                 }
 
-                const newPlaylist = [...playlist, { id: videoId, title: `Vídeo (${videoId})` }];
+                setIsAddingTrack(true);
+                let title = `Vídeo (${videoId})`;
+
+                try {
+                    const res = await fetch(`https://noembed.com/embed?url=https://www.youtube.com/watch?v=${videoId}`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        if (data && data.title) {
+                            title = data.title;
+                        }
+                    }
+                } catch (err) {
+                    console.warn("Falha ao obter título do vídeo:", err);
+                } finally {
+                    setIsAddingTrack(false);
+                }
+
+                const newPlaylist = [...playlist, { id: videoId, title }];
                 setPlaylist(newPlaylist);
                 localStorage.setItem('vibedj_playlist', JSON.stringify(newPlaylist));
                 socket.emit('update_playlist', newPlaylist);
@@ -250,11 +541,14 @@
                 socket.emit('toggle_queue', playlist);
             };
 
+            const handleTrackEnded = () => {
+                socket.emit('track_ended');
+            };
+
             // Tela de Login
             if (!user) {
                 return (
                     <div className="flex flex-col min-h-screen items-center justify-center bg-gray-950 p-4">
-                        {/* Status de conexão com a Render */}
                         <div className="mb-4">
                             {isConnected ? (
                                 <span className="inline-flex items-center gap-2 text-xs font-semibold px-3 py-1 rounded-full bg-emerald-950 text-emerald-400 border border-emerald-800">
@@ -272,7 +566,7 @@
                         <form onSubmit={handleLogin} className="bg-gray-900 p-8 rounded-2xl neon-border text-center max-w-sm w-full">
                             <div className="text-4xl mb-2">🎧</div>
                             <h1 className="text-3xl font-black text-pink-500 mb-1 tracking-wider">VIBEDJ</h1>
-                            <p className="text-xs text-gray-400 mb-6">Música síncrona com seus amigos</p>
+                            <p className="text-xs text-gray-400 mb-6">Música em sincronia com seus amigos</p>
 
                             <input
                                 type="text"
@@ -292,20 +586,19 @@
 
                         {!isConnected && (
                             <p className="mt-4 text-xs text-gray-500 text-center max-w-xs">
-                                💡 Dica: Se o servidor na Render estiver acordando do modo de espera, pode levar cerca de 30 segundos para conectar.
+                                💡 Dica: Se o servidor na Render estiver acordando do repouso, pode levar cerca de 30 segundos para conectar.
                             </p>
                         )}
                     </div>
                 );
             }
 
-            // Verifica se o usuário atual está na fila de DJs
             const isDjInQueue = roomState.djQueue.some(dj => dj.name === user.name || dj.id === user.id);
             const isCurrentDj = (roomState.currentDj?.name === user.name) || (roomState.currentDj?.id === user.id);
 
             return (
                 <div className="flex flex-col h-screen bg-gray-950 text-white overflow-hidden">
-                    {/* Barra Superior / Header */}
+                    {/* Header */}
                     <header className="h-14 bg-gray-900 border-b border-gray-800 px-4 flex items-center justify-between shrink-0">
                         <div className="flex items-center gap-3">
                             <span className="text-pink-500 font-black text-lg tracking-wider flex items-center gap-1.5">
@@ -341,7 +634,7 @@
                         {/* Usuário e Logout */}
                         <div className="flex items-center gap-3">
                             <span className="text-xs font-semibold text-gray-300 hidden sm:inline">
-                                {user.name}
+                                {user.name} {isCurrentDj && <span className="text-pink-400 font-bold">(DJ da Vez)</span>}
                             </span>
                             <button
                                 onClick={handleLogout}
@@ -356,39 +649,79 @@
                     {/* Conteúdo Principal */}
                     <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
 
-                        {/* Área Principal: Player, Votos e Filas (sempre visível no Desktop; no mobile depende da aba) */}
+                        {/* Área Principal: Player, Votos e Filas */}
                         <div className={`flex-1 flex-col p-3 md:p-4 gap-4 overflow-y-auto custom-scroll ${mobileTab === 'sala' ? 'flex' : 'hidden lg:flex'}`}>
 
-                            {/* Player de Vídeo */}
+                            {/* Player de Vídeo com Sincronização */}
                             <div className="relative aspect-video w-full max-h-[48vh] bg-black rounded-xl overflow-hidden shadow-2xl border border-gray-800 flex items-center justify-center shrink-0">
-                                {roomState.currentTrack ? (
-                                    <iframe
-                                        key={roomState.currentTrack.id}
-                                        src={`https://www.youtube.com/embed/${roomState.currentTrack.id}?autoplay=1&enablejsapi=1`}
-                                        className="w-full h-full border-none"
-                                        allow="autoplay; encrypted-media"
-                                        allowFullScreen
-                                    ></iframe>
-                                ) : (
-                                    <div className="text-center text-gray-500 p-4">
-                                        <div className="text-3xl mb-2">📻</div>
-                                        <p className="text-lg font-bold text-gray-300">Nenhum DJ tocando agora</p>
-                                        <p className="text-xs text-gray-500">Adicione suas músicas e entre na fila para assumir a mesa!</p>
-                                    </div>
-                                )}
+                                <VideoPlayer
+                                    currentTrack={roomState.currentTrack}
+                                    isPlaying={roomState.isPlaying}
+                                    isCurrentDj={isCurrentDj}
+                                    onTrackEnded={handleTrackEnded}
+                                    onRegisterSync={handleRegisterSync}
+                                />
                             </div>
 
-                            {/* Barra de Status e Votação */}
+                            {/* Barra de Status e Controles Exclusivos do DJ (Requisito 1) */}
                             <div className="bg-gray-900 p-3.5 rounded-xl flex flex-wrap items-center justify-between gap-3 border border-gray-800 shrink-0">
                                 <div className="min-w-[150px]">
-                                    <p className="text-[10px] text-pink-400 font-bold uppercase tracking-wider">Tocando Agora</p>
+                                    <div className="flex items-center gap-2 mb-0.5">
+                                        <p className="text-[10px] text-pink-400 font-bold uppercase tracking-wider">Tocando Agora</p>
+                                        {roomState.currentTrack && (
+                                            <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold flex items-center gap-1 ${
+                                                roomState.isPlaying 
+                                                    ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' 
+                                                    : 'bg-amber-950 text-amber-400 border border-amber-800'
+                                            }`}>
+                                                <span className={`w-1.5 h-1.5 rounded-full ${roomState.isPlaying ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`}></span>
+                                                {roomState.isPlaying ? 'Ao Vivo' : 'Pausado pelo DJ'}
+                                            </span>
+                                        )}
+                                    </div>
                                     <p className="font-bold text-sm sm:text-base truncate max-w-xs sm:max-w-md">
                                         {roomState.currentTrack?.title || 'Silêncio na Sala'}
                                     </p>
-                                    <p className="text-xs text-gray-400">DJ: <span className="text-white font-medium">{roomState.currentDj?.name || 'Ninguém'}</span></p>
+                                    <p className="text-xs text-gray-400">
+                                        DJ: <span className="text-white font-medium">{roomState.currentDj?.name || 'Ninguém'}</span>
+                                    </p>
                                 </div>
 
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                    {/* CONTROLES EXCLUSIVOS DO DJ ATUAL (Requisito 1) */}
+                                    {isCurrentDj && roomState.currentTrack && (
+                                        <div className="flex items-center gap-1.5 bg-gray-800/80 p-1 rounded-lg border border-pink-500/40">
+                                            {/* Botão de Play / Pause sincronizado */}
+                                            {roomState.isPlaying ? (
+                                                <button
+                                                    onClick={() => socket.emit('dj_pause')}
+                                                    title="Pausar para toda a sala"
+                                                    className="bg-amber-600 hover:bg-amber-500 active:scale-95 px-3 py-1.5 rounded-md font-bold text-xs flex items-center gap-1 transition shadow"
+                                                >
+                                                    ⏸️ Pausar
+                                                </button>
+                                            ) : (
+                                                <button
+                                                    onClick={() => socket.emit('dj_play')}
+                                                    title="Tocar para toda a sala"
+                                                    className="bg-emerald-600 hover:bg-emerald-500 active:scale-95 px-3 py-1.5 rounded-md font-bold text-xs flex items-center gap-1 transition shadow"
+                                                >
+                                                    ▶️ Play
+                                                </button>
+                                            )}
+
+                                            {/* Pular para a próxima música */}
+                                            <button
+                                                onClick={() => socket.emit('skip_track')}
+                                                title="Pular faixa"
+                                                className="bg-rose-600 hover:bg-rose-500 active:scale-95 px-3 py-1.5 rounded-md font-bold text-xs flex items-center gap-1 transition shadow"
+                                            >
+                                                ⏭️ Pular
+                                            </button>
+                                        </div>
+                                    )}
+
+                                    {/* Botões de Votação (Para todos os participantes) */}
                                     <button
                                         onClick={() => socket.emit('vote', 'woot')}
                                         className="bg-emerald-600 hover:bg-emerald-500 active:scale-95 px-3.5 py-2 rounded-lg font-bold text-xs sm:text-sm flex items-center gap-1.5 transition shadow"
@@ -401,14 +734,6 @@
                                     >
                                         👎 Meh ({roomState.votes?.meh || 0})
                                     </button>
-                                    {isCurrentDj && (
-                                        <button
-                                            onClick={() => socket.emit('skip_track')}
-                                            className="bg-amber-600 hover:bg-amber-500 active:scale-95 px-3 py-2 rounded-lg font-bold text-xs sm:text-sm transition shadow"
-                                        >
-                                            ⏭️ Pular
-                                        </button>
-                                    )}
                                 </div>
                             </div>
 
@@ -427,10 +752,15 @@
                                             placeholder="Cole link do YouTube ou Shorts..."
                                             value={videoUrl}
                                             onChange={(e) => setVideoUrl(e.target.value)}
-                                            className="flex-1 bg-gray-800 border border-gray-700 px-3 py-1.5 rounded-lg text-xs outline-none focus:border-pink-500 transition"
+                                            disabled={isAddingTrack}
+                                            className="flex-1 bg-gray-800 border border-gray-700 px-3 py-1.5 rounded-lg text-xs outline-none focus:border-pink-500 transition disabled:opacity-50"
                                         />
-                                        <button type="submit" className="bg-pink-600 hover:bg-pink-500 px-3 py-1.5 rounded-lg font-bold text-xs transition">
-                                            Add
+                                        <button
+                                            type="submit"
+                                            disabled={isAddingTrack}
+                                            className="bg-pink-600 hover:bg-pink-500 px-3 py-1.5 rounded-lg font-bold text-xs transition disabled:opacity-50"
+                                        >
+                                            {isAddingTrack ? 'Buscando...' : 'Add'}
                                         </button>
                                     </form>
                                     <div className="flex-1 overflow-y-auto custom-scroll space-y-1.5 pr-1">
@@ -441,7 +771,9 @@
                                         ) : (
                                             playlist.map((track, idx) => (
                                                 <div key={idx} className="bg-gray-800 hover:bg-gray-750 p-2 rounded-lg text-xs flex justify-between items-center group">
-                                                    <span className="truncate pr-2 font-medium">{idx + 1}. {track.title}</span>
+                                                    <span className="truncate pr-2 font-medium" title={track.title}>
+                                                        {idx + 1}. {track.title}
+                                                    </span>
                                                     <button
                                                         onClick={() => handleRemoveSong(idx)}
                                                         className="text-gray-500 hover:text-red-400 transition text-xs font-bold px-1"
@@ -498,7 +830,7 @@
 
                         </div>
 
-                        {/* Área do Chat (visível no desktop à direita; no mobile se mobileTab === 'chat') */}
+                        {/* Área do Chat */}
                         <div className={`w-full lg:w-80 lg:max-w-sm bg-gray-900 border-l border-gray-800 flex-col h-full ${mobileTab === 'chat' ? 'flex' : 'hidden lg:flex'}`}>
                             <div className="p-3 border-b border-gray-800 flex items-center justify-between shrink-0">
                                 <h2 className="font-bold text-sm text-pink-400 flex items-center gap-2">

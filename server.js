@@ -22,7 +22,6 @@ const io = new Server(server, {
         origin: "*",
         methods: ["GET", "POST"]
     },
-    // WebSocket nativo é prioritário (evita bloqueios de proxy HTTP no Render e redes 4G/5G)
     transports: ['websocket', 'polling'],
     pingTimeout: 60000,
     pingInterval: 25000,
@@ -35,6 +34,8 @@ let roomState = {
     currentDj: null,
     currentTrack: null,
     startTime: null,
+    isPlaying: false,
+    pausedAt: null,
     djQueue: [],
     messages: [],
     votes: { woot: 0, meh: 0, voters: {} }
@@ -43,6 +44,32 @@ let roomState = {
 // Dicionário de timers para tolerância de desconexão em redes móveis
 const disconnectTimers = {};
 
+// Função auxiliar para verificar se o socket é o DJ da vez
+function isCurrentDj(socket) {
+    if (!roomState.currentDj) return false;
+    const socketUserName = socket.data?.user?.name;
+    if (socketUserName && roomState.currentDj.name === socketUserName) return true;
+    if (roomState.currentDj.id === socket.id) return true;
+    return false;
+}
+
+// Calcula o tempo exato decorrido da música atual
+function getRoomCurrentTime() {
+    if (!roomState.currentTrack || !roomState.startTime) return 0;
+    if (!roomState.isPlaying && roomState.pausedAt !== null) {
+        return Math.max(0, (roomState.pausedAt - roomState.startTime) / 1000);
+    }
+    return Math.max(0, (Date.now() - roomState.startTime) / 1000);
+}
+
+// Retorna o estado público da sala com currentTime calculado
+function getPublicRoomState() {
+    return {
+        ...roomState,
+        currentTime: getRoomCurrentTime()
+    };
+}
+
 io.on('connection', (socket) => {
     console.log(`[Socket] Usuário conectado: ${socket.id} (transporte: ${socket.conn.transport.name})`);
 
@@ -50,8 +77,8 @@ io.on('connection', (socket) => {
         console.log(`[Socket] Conexão ${socket.id} promovida para ${socket.conn.transport.name}`);
     });
 
-    // Envia o estado atual da sala imediatamente na conexão
-    socket.emit('init_state', roomState);
+    // Envia o estado atual da sala imediatamente na conexão com currentTime preciso
+    socket.emit('init_state', getPublicRoomState());
 
     // Registro ou reconexão do usuário
     socket.on('set_user', (userData) => {
@@ -78,13 +105,13 @@ io.on('connection', (socket) => {
             existingDj.id = socket.id;
         }
 
-        // Se o usuário é o DJ atual, atualiza o socket ID
+        // Se o usuário é o DJ atual, atualiza o socket ID mantendo privilégios
         if (roomState.currentDj && roomState.currentDj.name === cleanName) {
             roomState.currentDj.id = socket.id;
         }
 
         socket.emit('user_registered', socket.data.user);
-        io.emit('update_room', roomState);
+        io.emit('update_room', getPublicRoomState());
         console.log(`[Auth] Usuário registrado: ${cleanName} (${socket.id})`);
     });
 
@@ -112,7 +139,7 @@ io.on('connection', (socket) => {
         }
 
         checkNextDj();
-        io.emit('update_room', roomState);
+        io.emit('update_room', getPublicRoomState());
     });
 
     // Atualização da playlist do DJ
@@ -122,7 +149,110 @@ io.on('connection', (socket) => {
         if (dj) {
             dj.playlist = Array.isArray(playlist) ? playlist : [];
             checkNextDj();
-            io.emit('update_room', roomState);
+            io.emit('update_room', getPublicRoomState());
+        }
+    });
+
+    // ==========================================
+    // CONTROLES EXCLUSIVOS DO DJ (PLAYER)
+    // ==========================================
+
+    // DJ dá play na faixa
+    socket.on('dj_play', () => {
+        if (!isCurrentDj(socket)) {
+            console.warn(`[Permissão Negada] ${socket.data.user?.name || socket.id} tentou dar play sem ser o DJ.`);
+            return;
+        }
+        if (roomState.isPlaying || !roomState.currentTrack) return;
+
+        if (roomState.pausedAt) {
+            const pausedDuration = Date.now() - roomState.pausedAt;
+            roomState.startTime = (roomState.startTime || Date.now()) + pausedDuration;
+        } else {
+            roomState.startTime = Date.now();
+        }
+        roomState.isPlaying = true;
+        roomState.pausedAt = null;
+
+        const currentTime = getRoomCurrentTime();
+        console.log(`[Player] DJ ${socket.data.user?.name} deu play em ${currentTime.toFixed(1)}s`);
+        io.emit('player_action', { action: 'play', currentTime, isPlaying: true });
+        io.emit('update_room', getPublicRoomState());
+    });
+
+    // DJ pausa a faixa
+    socket.on('dj_pause', () => {
+        if (!isCurrentDj(socket)) {
+            console.warn(`[Permissão Negada] ${socket.data.user?.name || socket.id} tentou pausar sem ser o DJ.`);
+            return;
+        }
+        if (!roomState.isPlaying || !roomState.currentTrack) return;
+
+        roomState.isPlaying = false;
+        roomState.pausedAt = Date.now();
+
+        const currentTime = getRoomCurrentTime();
+        console.log(`[Player] DJ ${socket.data.user?.name} pausou em ${currentTime.toFixed(1)}s`);
+        io.emit('player_action', { action: 'pause', currentTime, isPlaying: false });
+        io.emit('update_room', getPublicRoomState());
+    });
+
+    // DJ avança ou retrocede a faixa (seek)
+    socket.on('dj_seek', (targetTime) => {
+        if (!isCurrentDj(socket)) {
+            console.warn(`[Permissão Negada] ${socket.data.user?.name || socket.id} tentou alterar a posição sem ser o DJ.`);
+            return;
+        }
+        const timeInSeconds = parseFloat(targetTime);
+        if (isNaN(timeInSeconds) || timeInSeconds < 0 || !roomState.currentTrack) return;
+
+        roomState.startTime = Date.now() - (timeInSeconds * 1000);
+        if (!roomState.isPlaying) {
+            roomState.pausedAt = Date.now();
+        }
+
+        console.log(`[Player] DJ ${socket.data.user?.name} avançou faixa para ${timeInSeconds.toFixed(1)}s`);
+        io.emit('player_action', { action: 'seek', currentTime: timeInSeconds, isPlaying: roomState.isPlaying });
+        io.emit('update_room', getPublicRoomState());
+    });
+
+    // Pular música manualmente (Exclusivo do DJ)
+    socket.on('skip_track', () => {
+        if (isCurrentDj(socket)) {
+            console.log(`[Track] DJ ${socket.data.user?.name} pulou a música atual.`);
+            nextTrack();
+        } else {
+            console.warn(`[Permissão Negada] ${socket.data.user?.name || socket.id} tentou pular a música sem ser o DJ.`);
+        }
+    });
+
+    // ==========================================
+    // RESSINCRONIZAÇÃO EM TEMPO REAL (RESYNC)
+    // ==========================================
+
+    // Qualquer cliente solicita a posição exata (ao entrar, focar aba, trocar de app no celular)
+    socket.on('request_sync', () => {
+        const currentTime = getRoomCurrentTime();
+        socket.emit('sync_time', {
+            currentTime,
+            isPlaying: roomState.isPlaying,
+            currentTrackId: roomState.currentTrack?.id || null,
+            serverTime: Date.now()
+        });
+    });
+
+    // Notificação de fim da música (acionada prioritariamente pelo DJ, com fallback)
+    socket.on('track_ended', () => {
+        const elapsed = getRoomCurrentTime();
+        const isDj = isCurrentDj(socket);
+        
+        const isDjPresent = roomState.currentDj?.name && Array.from(io.sockets.sockets.values()).some(
+            s => s.data.user?.name === roomState.currentDj.name
+        );
+
+        if (isDj || (!isDjPresent && elapsed > 10)) {
+            console.log(`[Track] Faixa finalizada (acionado por ${socket.data.user?.name || socket.id}). Próxima música.`);
+            nextTrack();
         }
     });
 
@@ -167,26 +297,6 @@ io.on('connection', (socket) => {
         io.emit('new_message', msg);
     });
 
-    // Pular música manualmente pelo DJ atual
-    socket.on('skip_track', () => {
-        const isCurrentDj = (socket.data.user && roomState.currentDj?.name === socket.data.user.name) ||
-                            roomState.currentDj?.id === socket.id;
-        if (isCurrentDj) {
-            console.log(`[Track] DJ pulou a música atual.`);
-            nextTrack();
-        }
-    });
-
-    // Notificação de fim da música
-    socket.on('track_ended', () => {
-        const isCurrentDj = (socket.data.user && roomState.currentDj?.name === socket.data.user.name) ||
-                            roomState.currentDj?.id === socket.id;
-        if (isCurrentDj) {
-            console.log(`[Track] Música finalizada.`);
-            nextTrack();
-        }
-    });
-
     // Desconexão com tolerância para redes móveis instáveis
     socket.on('disconnect', (reason) => {
         console.log(`[Socket] Desconectado: ${socket.id} (motivo: ${reason})`);
@@ -194,8 +304,6 @@ io.on('connection', (socket) => {
 
         if (!userName) return;
 
-        // Aguarda 15 segundos antes de remover da fila/tocar próximo DJ
-        // Isso impede que oscilações de 4G derrubem a pessoa instantaneamente
         disconnectTimers[userName] = setTimeout(() => {
             const isStillConnected = Array.from(io.sockets.sockets.values()).some(
                 s => s.data.user?.name === userName
@@ -207,7 +315,7 @@ io.on('connection', (socket) => {
                 if (roomState.currentDj?.name === userName || roomState.currentDj?.id === socket.id) {
                     nextTrack();
                 } else {
-                    io.emit('update_room', roomState);
+                    io.emit('update_room', getPublicRoomState());
                 }
             }
             delete disconnectTimers[userName];
@@ -226,8 +334,10 @@ function nextTrack() {
         roomState.currentDj = null;
         roomState.currentTrack = null;
         roomState.startTime = null;
+        roomState.isPlaying = false;
+        roomState.pausedAt = null;
         roomState.votes = { woot: 0, meh: 0, voters: {} };
-        io.emit('update_room', roomState);
+        io.emit('update_room', getPublicRoomState());
         return;
     }
 
@@ -245,6 +355,8 @@ function nextTrack() {
             roomState.currentDj = dj;
             roomState.currentTrack = track;
             roomState.startTime = Date.now();
+            roomState.isPlaying = true;
+            roomState.pausedAt = null;
             roomState.votes = { woot: 0, meh: 0, voters: {} };
             foundTrack = true;
             break;
@@ -256,10 +368,12 @@ function nextTrack() {
         roomState.currentDj = null;
         roomState.currentTrack = null;
         roomState.startTime = null;
+        roomState.isPlaying = false;
+        roomState.pausedAt = null;
         roomState.votes = { woot: 0, meh: 0, voters: {} };
     }
 
-    io.emit('update_room', roomState);
+    io.emit('update_room', getPublicRoomState());
 }
 
 // 0.0.0.0 é obrigatório na Render e serviços em nuvem para aceitar conexões externas

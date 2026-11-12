@@ -3,18 +3,26 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Plug.dj Cyber Edition</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>VibeDJ - Cyber Edition</title>
+    <!-- React & Babel -->
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="/socket.io/socket.io.js"></script>
+    <!-- Socket.IO Client (CDN com fallback local) -->
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script>
+        if (typeof io === 'undefined') {
+            document.write('<script src="/socket.io/socket.io.js"><\/script>');
+        }
+    </script>
     <style>
         body {
             background-color: #0b0c10;
             color: #fff;
-            font-family: sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
         }
 
         .neon-border {
@@ -25,9 +33,17 @@
             width: 6px;
         }
 
+        .custom-scroll::-webkit-scrollbar-track {
+            background: rgba(17, 24, 39, 0.7);
+        }
+
         .custom-scroll::-webkit-scrollbar-thumb {
             background: #374151;
             border-radius: 3px;
+        }
+
+        .custom-scroll::-webkit-scrollbar-thumb:hover {
+            background: #ec4899;
         }
     </style>
 </head>
@@ -37,41 +53,172 @@
 
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
-        const socket = io();
+
+        // Configuração de conexão do Socket.IO para nuvem (Render)
+        const socket = io({
+            transports: ['websocket', 'polling'],
+            reconnection: true,
+            reconnectionAttempts: Infinity,
+            reconnectionDelay: 1000,
+            timeout: 20000
+        });
+
+        // Função robusta de extração de ID do YouTube (links normais, celular, Shorts, youtu.be)
+        function extractVideoId(url) {
+            if (!url) return '';
+            const clean = url.trim();
+            const regExp = /(?:youtu\.be\/|youtube(?:-nocookie)?\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/|live\/))([\w-]{11})/;
+            const match = clean.match(regExp);
+            if (match && match[1]) {
+                return match[1];
+            }
+            if (/^[\w-]{11}$/.test(clean)) {
+                return clean;
+            }
+            return '';
+        }
 
         function App() {
+            const [isConnected, setIsConnected] = useState(socket.connected);
             const [user, setUser] = useState(null);
             const [nameInput, setNameInput] = useState('');
             const [roomState, setRoomState] = useState({ djQueue: [], messages: [], votes: { woot: 0, meh: 0 } });
             const [inputMsg, setInputMsg] = useState('');
             const [playlist, setPlaylist] = useState([]);
             const [videoUrl, setVideoUrl] = useState('');
-            const chatEndRef = useRef(null);
+            const [mobileTab, setMobileTab] = useState('sala'); // 'sala' ou 'chat' no celular
+            const [unreadCount, setUnreadCount] = useState(0);
 
+            const chatEndRef = useRef(null);
+            const mobileTabRef = useRef('sala');
+            mobileTabRef.current = mobileTab;
+
+            // Carrega dados salvos no localStorage (nome e playlist)
             useEffect(() => {
-                socket.on('init_state', (state) => setRoomState(state));
-                socket.on('update_room', (state) => setRoomState(state));
-                socket.on('update_votes', (votes) => setRoomState(prev => ({ ...prev, votes })));
-                socket.on('new_message', (msg) => {
-                    setRoomState(prev => ({ ...prev, messages: [...prev.messages, msg] }));
-                });
-                socket.on('user_registered', (u) => setUser(u));
+                const savedName = localStorage.getItem('vibedj_user_name');
+                if (savedName) setNameInput(savedName);
+
+                try {
+                    const savedPlaylist = localStorage.getItem('vibedj_playlist');
+                    if (savedPlaylist) {
+                        const parsed = JSON.parse(savedPlaylist);
+                        if (Array.isArray(parsed)) setPlaylist(parsed);
+                    }
+                } catch (e) {
+                    console.error("Erro ao carregar playlist do localStorage:", e);
+                }
             }, []);
 
+            // Gerencia eventos de conexão e do jogo
+            useEffect(() => {
+                const onConnect = () => {
+                    console.log('[VibeDJ] Conectado ao servidor! Socket ID:', socket.id);
+                    setIsConnected(true);
+
+                    // Reautentica automaticamente na reconexão
+                    const savedName = localStorage.getItem('vibedj_user_name');
+                    if (savedName) {
+                        socket.emit('set_user', { name: savedName, avatar: '🎧' });
+                    }
+                };
+
+                const onDisconnect = (reason) => {
+                    console.warn('[VibeDJ] Desconectado do servidor:', reason);
+                    setIsConnected(false);
+                };
+
+                const onConnectError = (error) => {
+                    console.error('[VibeDJ] Erro de conexão:', error);
+                    setIsConnected(false);
+                };
+
+                const onInitState = (state) => {
+                    console.log('[VibeDJ] Estado inicial recebido:', state);
+                    setRoomState(state);
+                };
+
+                const onUpdateRoom = (state) => {
+                    setRoomState(state);
+                };
+
+                const onUpdateVotes = (votes) => {
+                    setRoomState(prev => ({ ...prev, votes }));
+                };
+
+                const onNewMessage = (msg) => {
+                    setRoomState(prev => ({ ...prev, messages: [...prev.messages, msg] }));
+                    if (mobileTabRef.current !== 'chat') {
+                        setUnreadCount(prev => prev + 1);
+                    }
+                };
+
+                const onUserRegistered = (u) => {
+                    console.log('[VibeDJ] Usuário registrado com sucesso:', u);
+                    setUser(u);
+                    localStorage.setItem('vibedj_user_name', u.name);
+                };
+
+                socket.on('connect', onConnect);
+                socket.on('disconnect', onDisconnect);
+                socket.on('connect_error', onConnectError);
+                socket.on('init_state', onInitState);
+                socket.on('update_room', onUpdateRoom);
+                socket.on('update_votes', onUpdateVotes);
+                socket.on('new_message', onNewMessage);
+                socket.on('user_registered', onUserRegistered);
+
+                if (socket.connected) {
+                    onConnect();
+                }
+
+                return () => {
+                    socket.off('connect', onConnect);
+                    socket.off('disconnect', onDisconnect);
+                    socket.off('connect_error', onConnectError);
+                    socket.off('init_state', onInitState);
+                    socket.off('update_room', onUpdateRoom);
+                    socket.off('update_votes', onUpdateVotes);
+                    socket.off('new_message', onNewMessage);
+                    socket.off('user_registered', onUserRegistered);
+                };
+            }, []);
+
+            // Scroll automático para a última mensagem do chat
             useEffect(() => {
                 chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-            }, [roomState.messages]);
+            }, [roomState.messages, mobileTab]);
+
+            // Se o usuário mudar para a aba de chat, zera contador de não lidas
+            const handleSwitchTab = (tab) => {
+                setMobileTab(tab);
+                if (tab === 'chat') {
+                    setUnreadCount(0);
+                }
+            };
 
             const handleLogin = (e) => {
                 e.preventDefault();
-                if (!nameInput.trim()) return;
-                socket.emit('set_user', { name: nameInput, avatar: '🎧' });
+                const cleanName = nameInput.trim();
+                if (!cleanName) return;
+
+                localStorage.setItem('vibedj_user_name', cleanName);
+                setUser({ name: cleanName, avatar: '🎧', id: socket.id });
+                socket.emit('set_user', { name: cleanName, avatar: '🎧' });
+            };
+
+            const handleLogout = () => {
+                localStorage.removeItem('vibedj_user_name');
+                setUser(null);
             };
 
             const handleSendMessage = (e) => {
                 e.preventDefault();
                 if (!inputMsg.trim()) return;
-                socket.emit('send_message', inputMsg);
+                socket.emit('send_message', {
+                    text: inputMsg,
+                    userName: user?.name,
+                    userAvatar: user?.avatar || '🎧'
+                });
                 setInputMsg('');
             };
 
@@ -79,166 +226,330 @@
                 e.preventDefault();
                 if (!videoUrl) return;
 
-                let videoId = '';
-                if (videoUrl.includes('v=')) videoId = videoUrl.split('v=')[1].split('&')[0];
-                else if (videoUrl.includes('youtu.be/')) videoId = videoUrl.split('youtu.be/')[1].split('?')[0];
-
-                if (videoId) {
-                    const newPlaylist = [...playlist, { id: videoId, title: `Vídeo (${videoId})` }];
-                    setPlaylist(newPlaylist);
-                    socket.emit('update_playlist', newPlaylist);
-                    setVideoUrl('');
+                const videoId = extractVideoId(videoUrl);
+                if (!videoId) {
+                    alert('URL do YouTube inválida! Por favor, cole um link de vídeo ou Shorts.');
+                    return;
                 }
+
+                const newPlaylist = [...playlist, { id: videoId, title: `Vídeo (${videoId})` }];
+                setPlaylist(newPlaylist);
+                localStorage.setItem('vibedj_playlist', JSON.stringify(newPlaylist));
+                socket.emit('update_playlist', newPlaylist);
+                setVideoUrl('');
             };
 
-            const extractVideoId = (url) => {
-                if (!url) return '';
-                if (url.includes('v=')) return url.split('v=')[1].split('&')[0];
-                if (url.includes('youtu.be/')) return url.split('youtu.be/')[1].split('?')[0];
-                return url;
+            const handleRemoveSong = (indexToRemove) => {
+                const newPlaylist = playlist.filter((_, idx) => idx !== indexToRemove);
+                setPlaylist(newPlaylist);
+                localStorage.setItem('vibedj_playlist', JSON.stringify(newPlaylist));
+                socket.emit('update_playlist', newPlaylist);
             };
 
+            const handleToggleQueue = () => {
+                socket.emit('toggle_queue', playlist);
+            };
+
+            // Tela de Login
             if (!user) {
                 return (
-                    <div className="flex h-screen items-center justify-center bg-gray-950">
+                    <div className="flex flex-col min-h-screen items-center justify-center bg-gray-950 p-4">
+                        {/* Status de conexão com a Render */}
+                        <div className="mb-4">
+                            {isConnected ? (
+                                <span className="inline-flex items-center gap-2 text-xs font-semibold px-3 py-1 rounded-full bg-emerald-950 text-emerald-400 border border-emerald-800">
+                                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                                    Servidor Conectado
+                                </span>
+                            ) : (
+                                <span className="inline-flex items-center gap-2 text-xs font-semibold px-3 py-1 rounded-full bg-amber-950 text-amber-400 border border-amber-800">
+                                    <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping"></span>
+                                    Conectando ao servidor na nuvem...
+                                </span>
+                            )}
+                        </div>
+
                         <form onSubmit={handleLogin} className="bg-gray-900 p-8 rounded-2xl neon-border text-center max-w-sm w-full">
-                            <h1 className="text-3xl font-black text-pink-500 mb-4">PLUG.DJ CLONE</h1>
+                            <div className="text-4xl mb-2">🎧</div>
+                            <h1 className="text-3xl font-black text-pink-500 mb-1 tracking-wider">VIBEDJ</h1>
+                            <p className="text-xs text-gray-400 mb-6">Música síncrona com seus amigos</p>
+
                             <input
                                 type="text"
                                 placeholder="Seu Nickname..."
                                 value={nameInput}
                                 onChange={(e) => setNameInput(e.target.value)}
-                                className="w-full bg-gray-800 border border-gray-700 p-3 rounded-lg text-white mb-4 outline-none focus:border-pink-500"
+                                maxLength={25}
+                                className="w-full bg-gray-800 border border-gray-700 p-3 rounded-lg text-white mb-4 outline-none focus:border-pink-500 transition"
                             />
-                            <button className="w-full bg-pink-600 hover:bg-pink-500 font-bold p-3 rounded-lg transition">Entrar na Sala</button>
+                            <button
+                                type="submit"
+                                className="w-full bg-pink-600 hover:bg-pink-500 font-bold p-3 rounded-lg transition active:scale-95 shadow-lg shadow-pink-600/30"
+                            >
+                                Entrar na Sala
+                            </button>
                         </form>
+
+                        {!isConnected && (
+                            <p className="mt-4 text-xs text-gray-500 text-center max-w-xs">
+                                💡 Dica: Se o servidor na Render estiver acordando do modo de espera, pode levar cerca de 30 segundos para conectar.
+                            </p>
+                        )}
                     </div>
                 );
             }
 
-            const isDjInQueue = roomState.djQueue.some(dj => dj.id === user.id);
+            // Verifica se o usuário atual está na fila de DJs
+            const isDjInQueue = roomState.djQueue.some(dj => dj.name === user.name || dj.id === user.id);
+            const isCurrentDj = (roomState.currentDj?.name === user.name) || (roomState.currentDj?.id === user.id);
 
             return (
-                <div className="flex h-screen bg-gray-950 text-white overflow-hidden">
-                    <div className="flex-1 flex flex-col p-4 gap-4">
-
-                        <div className="relative aspect-video bg-black rounded-xl overflow-hidden shadow-2xl border border-gray-800 flex items-center justify-center">
-                            {roomState.currentTrack ? (
-                                <iframe
-                                    src={`https://www.youtube.com/embed/${extractVideoId(roomState.currentTrack.id)}?autoplay=1&enablejsapi=1`}
-                                    className="w-full h-full border-none"
-                                    allow="autoplay; encrypted-media"
-                                ></iframe>
-                            ) : (
-                                <div className="text-center text-gray-500">
-                                    <p className="text-xl font-bold">Nenhum DJ tocando no momento</p>
-                                    <p className="text-sm">Adicione músicas e entre na fila!</p>
-                                </div>
-                            )}
+                <div className="flex flex-col h-screen bg-gray-950 text-white overflow-hidden">
+                    {/* Barra Superior / Header */}
+                    <header className="h-14 bg-gray-900 border-b border-gray-800 px-4 flex items-center justify-between shrink-0">
+                        <div className="flex items-center gap-3">
+                            <span className="text-pink-500 font-black text-lg tracking-wider flex items-center gap-1.5">
+                                🎧 VIBEDJ
+                            </span>
+                            <div className="hidden sm:flex items-center gap-1.5 text-xs text-gray-400 bg-gray-800/80 px-2.5 py-1 rounded-full">
+                                <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-500' : 'bg-amber-500 animate-ping'}`}></span>
+                                {isConnected ? 'Online' : 'Reconectando...'}
+                            </div>
                         </div>
 
-                        <div className="bg-gray-900 p-4 rounded-xl flex items-center justify-between border border-gray-800">
-                            <div>
-                                <p className="text-xs text-pink-400 font-semibold uppercase">Tocando Agora</p>
-                                <p className="font-bold text-lg">{roomState.currentTrack?.title || 'Silêncio na Sala'}</p>
-                                <p className="text-xs text-gray-400">DJ: {roomState.currentDj?.name || 'Ninguém'}</p>
-                            </div>
+                        {/* Abas no Celular */}
+                        <div className="flex lg:hidden bg-gray-800 p-1 rounded-lg text-xs font-bold">
+                            <button
+                                onClick={() => handleSwitchTab('sala')}
+                                className={`px-3 py-1.5 rounded-md transition ${mobileTab === 'sala' ? 'bg-pink-600 text-white' : 'text-gray-400'}`}
+                            >
+                                📺 Sala & Fila
+                            </button>
+                            <button
+                                onClick={() => handleSwitchTab('chat')}
+                                className={`px-3 py-1.5 rounded-md transition relative ${mobileTab === 'chat' ? 'bg-pink-600 text-white' : 'text-gray-400'}`}
+                            >
+                                💬 Chat
+                                {unreadCount > 0 && (
+                                    <span className="ml-1 bg-red-500 text-white text-[10px] px-1.5 py-0.2 rounded-full">
+                                        {unreadCount}
+                                    </span>
+                                )}
+                            </button>
+                        </div>
 
-                            <div className="flex items-center gap-3">
-                                <button
-                                    onClick={() => socket.emit('vote', 'woot')}
-                                    className="bg-emerald-600 hover:bg-emerald-500 px-5 py-2.5 rounded-lg font-bold flex items-center gap-2 transition"
-                                >
-                                    👍 Woot ({roomState.votes?.woot || 0})
-                                </button>
-                                <button
-                                    onClick={() => socket.emit('vote', 'meh')}
-                                    className="bg-rose-600 hover:bg-rose-500 px-5 py-2.5 rounded-lg font-bold flex items-center gap-2 transition"
-                                >
-                                    👎 Meh ({roomState.votes?.meh || 0})
-                                </button>
-                                {roomState.currentDj?.id === user.id && (
-                                    <button
-                                        onClick={() => socket.emit('skip_track')}
-                                        className="bg-amber-600 hover:bg-amber-500 px-4 py-2.5 rounded-lg font-bold transition"
-                                    >
-                                        ⏭️ Pular
-                                    </button>
+                        {/* Usuário e Logout */}
+                        <div className="flex items-center gap-3">
+                            <span className="text-xs font-semibold text-gray-300 hidden sm:inline">
+                                {user.name}
+                            </span>
+                            <button
+                                onClick={handleLogout}
+                                title="Trocar de Nickname"
+                                className="text-xs text-gray-400 hover:text-red-400 bg-gray-800 hover:bg-gray-700 px-2.5 py-1 rounded transition"
+                            >
+                                Sair
+                            </button>
+                        </div>
+                    </header>
+
+                    {/* Conteúdo Principal */}
+                    <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
+
+                        {/* Área Principal: Player, Votos e Filas (sempre visível no Desktop; no mobile depende da aba) */}
+                        <div className={`flex-1 flex-col p-3 md:p-4 gap-4 overflow-y-auto custom-scroll ${mobileTab === 'sala' ? 'flex' : 'hidden lg:flex'}`}>
+
+                            {/* Player de Vídeo */}
+                            <div className="relative aspect-video w-full max-h-[48vh] bg-black rounded-xl overflow-hidden shadow-2xl border border-gray-800 flex items-center justify-center shrink-0">
+                                {roomState.currentTrack ? (
+                                    <iframe
+                                        key={roomState.currentTrack.id}
+                                        src={`https://www.youtube.com/embed/${roomState.currentTrack.id}?autoplay=1&enablejsapi=1`}
+                                        className="w-full h-full border-none"
+                                        allow="autoplay; encrypted-media"
+                                        allowFullScreen
+                                    ></iframe>
+                                ) : (
+                                    <div className="text-center text-gray-500 p-4">
+                                        <div className="text-3xl mb-2">📻</div>
+                                        <p className="text-lg font-bold text-gray-300">Nenhum DJ tocando agora</p>
+                                        <p className="text-xs text-gray-500">Adicione suas músicas e entre na fila para assumir a mesa!</p>
+                                    </div>
                                 )}
                             </div>
-                        </div>
 
-                        <div className="grid grid-cols-2 gap-4 flex-1">
-                            <div className="bg-gray-900 p-4 rounded-xl border border-gray-800 flex flex-col">
-                                <h3 className="font-bold text-pink-400 mb-2">Minhas Músicas</h3>
-                                <form onSubmit={handleAddSong} className="flex gap-2 mb-3">
-                                    <input
-                                        type="text"
-                                        placeholder="Cole a URL do YouTube"
-                                        value={videoUrl}
-                                        onChange={(e) => setVideoUrl(e.target.value)}
-                                        className="flex-1 bg-gray-800 border border-gray-700 px-3 py-1.5 rounded text-sm outline-none"
-                                    />
-                                    <button className="bg-pink-600 px-3 py-1.5 rounded font-bold text-sm">Add</button>
-                                </form>
-                                <div className="flex-1 overflow-y-auto custom-scroll space-y-2">
-                                    {playlist.map((track, idx) => (
-                                        <div key={idx} className="bg-gray-800 p-2 rounded text-xs truncate">
-                                            {track.title}
-                                        </div>
-                                    ))}
+                            {/* Barra de Status e Votação */}
+                            <div className="bg-gray-900 p-3.5 rounded-xl flex flex-wrap items-center justify-between gap-3 border border-gray-800 shrink-0">
+                                <div className="min-w-[150px]">
+                                    <p className="text-[10px] text-pink-400 font-bold uppercase tracking-wider">Tocando Agora</p>
+                                    <p className="font-bold text-sm sm:text-base truncate max-w-xs sm:max-w-md">
+                                        {roomState.currentTrack?.title || 'Silêncio na Sala'}
+                                    </p>
+                                    <p className="text-xs text-gray-400">DJ: <span className="text-white font-medium">{roomState.currentDj?.name || 'Ninguém'}</span></p>
                                 </div>
-                            </div>
 
-                            <div className="bg-gray-900 p-4 rounded-xl border border-gray-800 flex flex-col">
-                                <div className="flex justify-between items-center mb-2">
-                                    <h3 className="font-bold text-cyan-400">Fila de DJs</h3>
+                                <div className="flex items-center gap-2">
                                     <button
-                                        onClick={() => socket.emit('toggle_queue', playlist)}
-                                        className={`px-3 py-1 rounded text-xs font-bold ${isDjInQueue ? 'bg-red-600' : 'bg-cyan-600'}`}
+                                        onClick={() => socket.emit('vote', 'woot')}
+                                        className="bg-emerald-600 hover:bg-emerald-500 active:scale-95 px-3.5 py-2 rounded-lg font-bold text-xs sm:text-sm flex items-center gap-1.5 transition shadow"
                                     >
-                                        {isDjInQueue ? 'Sair da Fila' : 'Entrar na Fila'}
+                                        👍 Woot ({roomState.votes?.woot || 0})
                                     </button>
-                                </div>
-                                <div className="flex-1 overflow-y-auto custom-scroll space-y-2">
-                                    {roomState.djQueue.map((dj, idx) => (
-                                        <div key={idx} className="bg-gray-800 p-2 rounded text-xs flex justify-between items-center">
-                                            <span>{idx + 1}. {dj.name}</span>
-                                            <span className="text-gray-400">{dj.playlist?.length || 0} músicas</span>
-                                        </div>
-                                    ))}
+                                    <button
+                                        onClick={() => socket.emit('vote', 'meh')}
+                                        className="bg-rose-600 hover:bg-rose-500 active:scale-95 px-3.5 py-2 rounded-lg font-bold text-xs sm:text-sm flex items-center gap-1.5 transition shadow"
+                                    >
+                                        👎 Meh ({roomState.votes?.meh || 0})
+                                    </button>
+                                    {isCurrentDj && (
+                                        <button
+                                            onClick={() => socket.emit('skip_track')}
+                                            className="bg-amber-600 hover:bg-amber-500 active:scale-95 px-3 py-2 rounded-lg font-bold text-xs sm:text-sm transition shadow"
+                                        >
+                                            ⏭️ Pular
+                                        </button>
+                                    )}
                                 </div>
                             </div>
-                        </div>
 
-                    </div>
-
-                    <div className="w-80 bg-gray-900 border-l border-gray-800 flex flex-col">
-                        <div className="p-4 border-b border-gray-800">
-                            <h2 className="font-bold text-lg">Chat da Sala</h2>
-                        </div>
-
-                        <div className="flex-1 p-4 overflow-y-auto custom-scroll space-y-3">
-                            {roomState.messages.map((msg) => (
-                                <div key={msg.id} className="text-xs">
-                                    <span className="font-bold text-pink-400">{msg.user}: </span>
-                                    <span className="text-gray-200">{msg.text}</span>
-                                    <span className="block text-[10px] text-gray-500">{msg.time}</span>
+                            {/* Colunas: Minhas Músicas & Fila de DJs */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 min-h-[220px] flex-1 pb-2">
+                                {/* Painel Minhas Músicas */}
+                                <div className="bg-gray-900 p-3.5 rounded-xl border border-gray-800 flex flex-col h-64 md:h-auto">
+                                    <div className="flex justify-between items-center mb-2">
+                                        <h3 className="font-bold text-pink-400 text-sm flex items-center gap-1.5">
+                                            🎵 Minhas Músicas ({playlist.length})
+                                        </h3>
+                                    </div>
+                                    <form onSubmit={handleAddSong} className="flex gap-2 mb-2.5">
+                                        <input
+                                            type="text"
+                                            placeholder="Cole link do YouTube ou Shorts..."
+                                            value={videoUrl}
+                                            onChange={(e) => setVideoUrl(e.target.value)}
+                                            className="flex-1 bg-gray-800 border border-gray-700 px-3 py-1.5 rounded-lg text-xs outline-none focus:border-pink-500 transition"
+                                        />
+                                        <button type="submit" className="bg-pink-600 hover:bg-pink-500 px-3 py-1.5 rounded-lg font-bold text-xs transition">
+                                            Add
+                                        </button>
+                                    </form>
+                                    <div className="flex-1 overflow-y-auto custom-scroll space-y-1.5 pr-1">
+                                        {playlist.length === 0 ? (
+                                            <p className="text-gray-500 text-xs italic text-center py-6">
+                                                Nenhuma música na sua playlist ainda.
+                                            </p>
+                                        ) : (
+                                            playlist.map((track, idx) => (
+                                                <div key={idx} className="bg-gray-800 hover:bg-gray-750 p-2 rounded-lg text-xs flex justify-between items-center group">
+                                                    <span className="truncate pr-2 font-medium">{idx + 1}. {track.title}</span>
+                                                    <button
+                                                        onClick={() => handleRemoveSong(idx)}
+                                                        className="text-gray-500 hover:text-red-400 transition text-xs font-bold px-1"
+                                                        title="Remover"
+                                                    >
+                                                        ✕
+                                                    </button>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
                                 </div>
-                            ))}
-                            <div ref={chatEndRef} />
+
+                                {/* Painel Fila de DJs */}
+                                <div className="bg-gray-900 p-3.5 rounded-xl border border-gray-800 flex flex-col h-64 md:h-auto">
+                                    <div className="flex justify-between items-center mb-2.5">
+                                        <h3 className="font-bold text-cyan-400 text-sm flex items-center gap-1.5">
+                                            🎧 Fila de DJs ({roomState.djQueue.length})
+                                        </h3>
+                                        <button
+                                            onClick={handleToggleQueue}
+                                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition shadow ${
+                                                isDjInQueue ? 'bg-red-600 hover:bg-red-500' : 'bg-cyan-600 hover:bg-cyan-500'
+                                            }`}
+                                        >
+                                            {isDjInQueue ? 'Sair da Fila' : 'Entrar na Fila'}
+                                        </button>
+                                    </div>
+                                    <div className="flex-1 overflow-y-auto custom-scroll space-y-1.5 pr-1">
+                                        {roomState.djQueue.length === 0 ? (
+                                            <p className="text-gray-500 text-xs italic text-center py-6">
+                                                A fila está vazia. Seja o primeiro a tocar!
+                                            </p>
+                                        ) : (
+                                            roomState.djQueue.map((dj, idx) => (
+                                                <div
+                                                    key={idx}
+                                                    className={`p-2 rounded-lg text-xs flex justify-between items-center ${
+                                                        dj.name === user.name ? 'bg-cyan-950/60 border border-cyan-800/60' : 'bg-gray-800'
+                                                    }`}
+                                                >
+                                                    <span className="font-medium flex items-center gap-1.5">
+                                                        <span>{dj.avatar || '🎧'}</span>
+                                                        <span>{idx + 1}. {dj.name}</span>
+                                                        {dj.name === user.name && <span className="text-[10px] text-cyan-400 font-bold">(Você)</span>}
+                                                    </span>
+                                                    <span className="text-gray-400 text-[11px]">{dj.playlist?.length || 0} músicas</span>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+
                         </div>
 
-                        <form onSubmit={handleSendMessage} className="p-4 border-t border-gray-800 flex gap-2">
-                            <input
-                                type="text"
-                                placeholder="Digite sua mensagem..."
-                                value={inputMsg}
-                                onChange={(e) => setInputMsg(e.target.value)}
-                                className="flex-1 bg-gray-800 border border-gray-700 p-2 rounded text-xs outline-none focus:border-pink-500"
-                            />
-                            <button className="bg-pink-600 p-2 rounded text-xs font-bold">Enviar</button>
-                        </form>
+                        {/* Área do Chat (visível no desktop à direita; no mobile se mobileTab === 'chat') */}
+                        <div className={`w-full lg:w-80 lg:max-w-sm bg-gray-900 border-l border-gray-800 flex-col h-full ${mobileTab === 'chat' ? 'flex' : 'hidden lg:flex'}`}>
+                            <div className="p-3 border-b border-gray-800 flex items-center justify-between shrink-0">
+                                <h2 className="font-bold text-sm text-pink-400 flex items-center gap-2">
+                                    💬 Chat da Sala
+                                </h2>
+                                <span className="text-[11px] text-gray-500">
+                                    {roomState.messages.length} mensagens
+                                </span>
+                            </div>
+
+                            {/* Lista de Mensagens */}
+                            <div className="flex-1 p-3 overflow-y-auto custom-scroll space-y-2.5">
+                                {roomState.messages.length === 0 ? (
+                                    <p className="text-gray-500 text-xs text-center py-10 italic">
+                                        Diga olá para a galera da sala! 👋
+                                    </p>
+                                ) : (
+                                    roomState.messages.map((msg) => (
+                                        <div key={msg.id} className="text-xs bg-gray-800/40 p-2 rounded-lg border border-gray-800/60">
+                                            <div className="flex justify-between items-center mb-0.5">
+                                                <span className="font-bold text-pink-400">
+                                                    {msg.avatar || '🎧'} {msg.user}
+                                                </span>
+                                                <span className="text-[10px] text-gray-500">{msg.time}</span>
+                                            </div>
+                                            <span className="text-gray-200 break-words">{msg.text}</span>
+                                        </div>
+                                    ))
+                                )}
+                                <div ref={chatEndRef} />
+                            </div>
+
+                            {/* Input do Chat */}
+                            <form onSubmit={handleSendMessage} className="p-3 border-t border-gray-800 flex gap-2 shrink-0 bg-gray-900">
+                                <input
+                                    type="text"
+                                    placeholder="Digite sua mensagem..."
+                                    value={inputMsg}
+                                    onChange={(e) => setInputMsg(e.target.value)}
+                                    maxLength={300}
+                                    className="flex-1 bg-gray-800 border border-gray-700 p-2 rounded-lg text-xs outline-none focus:border-pink-500 text-white transition"
+                                />
+                                <button
+                                    type="submit"
+                                    className="bg-pink-600 hover:bg-pink-500 px-3 py-2 rounded-lg text-xs font-bold transition shrink-0"
+                                >
+                                    Enviar
+                                </button>
+                            </form>
+                        </div>
+
                     </div>
                 </div>
             );

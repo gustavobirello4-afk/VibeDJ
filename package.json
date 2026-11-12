@@ -1,5 +1,5 @@
 {
-    "name": "plugdj-clone",
+    "name": "VibeDJ",
     "version": "1.0.0",
     "description": "Aplicação estilo Plug.dj com React e Socket.io",
     "main": "server.js",

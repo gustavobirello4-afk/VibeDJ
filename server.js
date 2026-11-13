@@ -1,9 +1,14 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
+const { Ytdl, chooseFormat } = require('@distube/ytdl-core');
 
 const app = express();
 const server = http.createServer(app);
+const ytdl = new Ytdl();
+
+// Cache em memória para URLs de áudio extraídas (válido por 30 minutos)
+const audioStreamCache = new Map();
 
 // Habilita CORS para requisições HTTP e polling de clientes externos
 app.use((req, res, next) => {
@@ -29,6 +34,85 @@ const io = new Server(server, {
 });
 
 app.use(express.static('public'));
+
+// =========================================================================
+// ROTAS DE EXTRAÇÃO E TRANSMISSÃO DIRETA DE ÁUDIO NATIVO (SISTEMA HÍBRIDO)
+// =========================================================================
+
+// Retorna metadados e URL direta de áudio (formato m4a / AAC nativo do iOS e Android)
+app.get('/api/audio/:videoId', async (req, res) => {
+    const videoId = req.params.videoId;
+    if (!videoId || !/^[\w-]{11}$/.test(videoId)) {
+        return res.status(400).json({ error: 'ID de vídeo inválido' });
+    }
+
+    const cached = audioStreamCache.get(videoId);
+    if (cached && (Date.now() - cached.timestamp < 30 * 60 * 1000)) {
+        return res.json(cached.data);
+    }
+
+    try {
+        const info = await ytdl.getInfo(videoId);
+        const format = chooseFormat(info.formats, {
+            filter: { hasAudio: true, hasVideo: false },
+            quality: 'highestaudio'
+        });
+
+        if (!format || !format.url) {
+            throw new Error('Nenhum formato de áudio puro encontrado');
+        }
+
+        const data = {
+            success: true,
+            videoId,
+            audioUrl: format.url,
+            mimeType: format.mimeType || 'audio/mp4; codecs="mp4a.40.2"',
+            container: format.container || 'mp4',
+            bitrate: format.audioBitrate || 128,
+            duration: parseInt(info.videoDetails.lengthSeconds, 10) || 0,
+            title: info.videoDetails.title
+        };
+
+        audioStreamCache.set(videoId, { timestamp: Date.now(), data });
+        console.log(`[AudioEngine] Áudio nativo extraído para ${videoId}: ${data.title} (${data.mimeType})`);
+        return res.json(data);
+    } catch (err) {
+        console.warn(`[AudioEngine] Falha ao extrair áudio de ${videoId}:`, err.message);
+        return res.status(500).json({
+            error: 'Falha ao extrair fluxo de áudio nativo',
+            details: err.message,
+            fallbackToIFrame: true
+        });
+    }
+});
+
+// Redirecionamento direto com suporte nativo a HTTP 206 (Range requests)
+app.get('/api/stream/:videoId', async (req, res) => {
+    const videoId = req.params.videoId;
+    if (!videoId || !/^[\w-]{11}$/.test(videoId)) {
+        return res.status(400).send('ID de vídeo inválido');
+    }
+
+    try {
+        let audioUrl = audioStreamCache.get(videoId)?.data?.audioUrl;
+
+        if (!audioUrl) {
+            const info = await ytdl.getInfo(videoId);
+            const format = chooseFormat(info.formats, {
+                filter: { hasAudio: true, hasVideo: false },
+                quality: 'highestaudio'
+            });
+            audioUrl = format?.url;
+        }
+
+        if (audioUrl) {
+            return res.redirect(audioUrl);
+        }
+        return res.status(404).send('Fluxo de áudio não encontrado');
+    } catch (err) {
+        return res.status(500).send('Erro ao buscar fluxo');
+    }
+});
 
 let roomState = {
     currentDj: null,

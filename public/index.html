@@ -89,13 +89,67 @@
         }
 
         // =========================================================================
-        // COMPONENTE DO PLAYER COM CONTROLE EXCLUSIVO DO DJ E AUTO-RESYNC
+        // PIPELINE DE ÁUDIO GLOBAL E PERSISTÊNCIA EM SEGUNDO PLANO (iOS / Android)
         // =========================================================================
-        function VideoPlayer({ currentTrack, isPlaying, isCurrentDj, volume = 100, isMuted = false, onTrackEnded, onRegisterSync }) {
+        let globalAudioCtx = null;
+
+        function unlockAudioContext() {
+            try {
+                const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                if (!AudioCtx) return;
+                if (!globalAudioCtx) {
+                    globalAudioCtx = new AudioCtx();
+                }
+                if (globalAudioCtx.state === 'suspended') {
+                    globalAudioCtx.resume();
+                }
+
+                // Cria um buffer silencioso contínuo para manter a sessão de áudio ativa no sistema operacional
+                const buffer = globalAudioCtx.createBuffer(1, globalAudioCtx.sampleRate * 0.1, globalAudioCtx.sampleRate);
+                const source = globalAudioCtx.createBufferSource();
+                source.buffer = buffer;
+                source.loop = true;
+                const gain = globalAudioCtx.createGain();
+                gain.gain.value = 0.0001; // Inaudível, mas registra a aba no mixer do sistema operacional móvel
+                source.connect(gain);
+                gain.connect(globalAudioCtx.destination);
+                source.start(0);
+                console.log('[AudioEngine] AudioContext desbloqueado e ativo para segundo plano.');
+            } catch (e) {
+                console.warn('[AudioEngine] Aviso ao inicializar AudioContext:', e);
+            }
+        }
+
+        // =========================================================================
+        // COMPONENTE DO PLAYER: COMPATIBILIDADE TOTAL iOS/ANDROID E AUTO-RESYNC
+        // =========================================================================
+        function VideoPlayer({
+            currentTrack,
+            isPlaying,
+            isCurrentDj,
+            volume = 100,
+            isMuted = false,
+            roomDjName = '',
+            roomCurrentTime = 0,
+            onTrackEnded,
+            onRegisterSync
+        }) {
             const playerContainerRef = useRef(null);
             const ytPlayerRef = useRef(null);
             const isReadyRef = useRef(false);
-            const [audioBlocked, setAudioBlocked] = useState(false);
+            const currentTrackIdRef = useRef(null);
+            const [audioNeedsUnlock, setAudioNeedsUnlock] = useState(false);
+            const autoplayTimerRef = useRef(null);
+
+            // Refs mutáveis para evitar re-criação desnecessária de callbacks
+            const isPlayingRef = useRef(isPlaying);
+            isPlayingRef.current = isPlaying;
+
+            const isMutedRef = useRef(isMuted);
+            isMutedRef.current = isMuted;
+
+            const volumeRef = useRef(volume);
+            volumeRef.current = volume;
 
             // Ajusta o volume e o mudo no YouTube Player localmente
             useEffect(() => {
@@ -135,7 +189,7 @@
                         if (playerState !== 1) {
                             const p = player.playVideo();
                             if (p && typeof p.catch === 'function') {
-                                p.catch(() => setAudioBlocked(true));
+                                p.catch(() => setAudioNeedsUnlock(true));
                             }
                         }
                     } else {
@@ -148,32 +202,48 @@
                 }
             }, []);
 
-            // Registra o manipulador de sincronização para ser acionado por visibilitychange e eventos de socket
+            // Registra o manipulador de sincronização
             useEffect(() => {
                 if (onRegisterSync) {
                     onRegisterSync(syncTo);
                 }
             }, [onRegisterSync, syncTo]);
 
-            // Inicialização do Player com a YouTube IFrame API
-            useEffect(() => {
-                if (!currentTrack || !currentTrack.id) {
-                    if (ytPlayerRef.current && typeof ytPlayerRef.current.destroy === 'function') {
-                        try { ytPlayerRef.current.destroy(); } catch (e) {}
-                        ytPlayerRef.current = null;
-                        isReadyRef.current = false;
+            // Verificador de Autoplay com Fallback Inteligente (iOS / Android)
+            const checkAutoplayHealth = useCallback(() => {
+                if (autoplayTimerRef.current) clearTimeout(autoplayTimerRef.current);
+
+                autoplayTimerRef.current = setTimeout(() => {
+                    const player = ytPlayerRef.current;
+                    if (!player || !isReadyRef.current) return;
+
+                    const state = typeof player.getPlayerState === 'function' ? player.getPlayerState() : -1;
+                    // Se a sala está tocando, mas o player não avançou para PLAYING (1) ou BUFFERING (3)
+                    if (isPlayingRef.current && state !== 1 && state !== 3) {
+                        console.warn('[Autoplay] Restrição móvel detectada. Aplicando fallback automático: mutando e forçando play.');
+                        try {
+                            player.mute();
+                            player.playVideo();
+                            setAudioNeedsUnlock(true);
+                        } catch (e) {
+                            console.warn('[Autoplay] Falha no fallback mutado:', e);
+                        }
                     }
-                    return;
-                }
+                }, 1200);
+            }, []);
+
+            // INICIALIZAÇÃO ÚNICA DA INSTÂNCIA DO PLAYER (Evita recriar o iframe no iOS)
+            useEffect(() => {
+                if (!currentTrack || !currentTrack.id) return;
+                if (ytPlayerRef.current) return; // Instância única persistente
 
                 let isMounted = true;
-                isReadyRef.current = false;
 
                 const initPlayer = () => {
                     if (!isMounted) return;
 
                     if (!window.YT || !window.YT.Player) {
-                        setTimeout(initPlayer, 200);
+                        setTimeout(initPlayer, 150);
                         return;
                     }
 
@@ -182,18 +252,18 @@
                     }
 
                     try {
+                        currentTrackIdRef.current = currentTrack.id;
                         ytPlayerRef.current = new window.YT.Player('yt-player-target', {
                             videoId: currentTrack.id,
                             width: '100%',
                             height: '100%',
                             playerVars: {
                                 autoplay: 1,
-                                // Ouvintes não recebem controles nativos nem atalhos de teclado do YouTube
                                 controls: isCurrentDj ? 1 : 0,
                                 disablekb: isCurrentDj ? 0 : 1,
                                 fs: isCurrentDj ? 1 : 0,
                                 enablejsapi: 1,
-                                playsinline: 1,
+                                playsinline: 1, // Previne tela cheia forçada no iOS Safari
                                 rel: 0,
                                 modestbranding: 1,
                                 origin: window.location.origin
@@ -202,31 +272,51 @@
                                 onReady: (e) => {
                                     if (!isMounted) return;
                                     isReadyRef.current = true;
-                                    console.log('[Player] YouTube Player carregado e pronto.');
+                                    console.log('[Player] YouTube Player pronto e integrado.');
 
-                                    // Solicita imediatamente a posição e estado da sala ao carregar
+                                    // Assegura permissões no elemento iframe gerado
+                                    const iframe = e.target.getIframe?.();
+                                    if (iframe) {
+                                        iframe.setAttribute('allow', 'autoplay; encrypted-media; picture-in-picture');
+                                        iframe.setAttribute('playsinline', '1');
+                                        iframe.setAttribute('webkit-playsinline', '1');
+                                    }
+
+                                    // Solicita a sincronização precisa da sala
                                     socket.emit('request_sync');
 
                                     try {
-                                        if (isMuted) {
+                                        if (isMutedRef.current) {
                                             e.target.mute();
                                         } else {
                                             e.target.unMute();
-                                            e.target.setVolume(volume);
+                                            e.target.setVolume(volumeRef.current);
                                         }
-                                        if (isPlaying) {
+
+                                        if (isPlayingRef.current) {
                                             e.target.playVideo();
                                         } else {
                                             e.target.pauseVideo();
                                         }
                                     } catch (err) {
-                                        setAudioBlocked(true);
+                                        console.warn('[Player] Autoplay inicial bloqueado:', err);
                                     }
+
+                                    checkAutoplayHealth();
                                 },
                                 onStateChange: (e) => {
+                                    // 1 = PLAYING
+                                    if (e.data === 1) {
+                                        if (e.target.isMuted && e.target.isMuted() && !isMutedRef.current) {
+                                            setAudioNeedsUnlock(true);
+                                        } else if (!isMutedRef.current) {
+                                            setAudioNeedsUnlock(false);
+                                        }
+                                    }
+
                                     // 0 = YT.PlayerState.ENDED
                                     if (e.data === 0) {
-                                        console.log('[Player] Música finalizada.');
+                                        console.log('[Player] Faixa encerrada.');
                                         if (onTrackEnded) onTrackEnded();
                                     }
                                 },
@@ -244,28 +334,125 @@
 
                 return () => {
                     isMounted = false;
-                    isReadyRef.current = false;
-                    if (ytPlayerRef.current && typeof ytPlayerRef.current.destroy === 'function') {
+                };
+            }, [Boolean(currentTrack?.id), isCurrentDj, checkAutoplayHealth, onTrackEnded]);
+
+            // CARREGAMENTO DE NOVAS FAIXAS REMOTAS SEM DESTRUIR O PLAYER (loadVideoById)
+            useEffect(() => {
+                if (!currentTrack || !currentTrack.id) {
+                    if (ytPlayerRef.current && isReadyRef.current) {
+                        try { ytPlayerRef.current.stopVideo(); } catch (e) {}
+                    }
+                    currentTrackIdRef.current = null;
+                    return;
+                }
+
+                if (ytPlayerRef.current && isReadyRef.current) {
+                    if (currentTrackIdRef.current !== currentTrack.id) {
+                        currentTrackIdRef.current = currentTrack.id;
+                        console.log(`[Player] Troca remota de faixa: ${currentTrack.id} (preservando iframe do iOS)`);
+
+                        const startSec = Math.max(0, Math.floor(roomCurrentTime || 0));
+
                         try {
-                            ytPlayerRef.current.destroy();
-                        } catch (e) {}
+                            // Carrega a nova faixa no mesmo iframe, preservando a autorização do iOS Safari
+                            ytPlayerRef.current.loadVideoById({
+                                videoId: currentTrack.id,
+                                startSeconds: startSec
+                            });
+
+                            if (isMutedRef.current) {
+                                ytPlayerRef.current.mute();
+                            } else {
+                                ytPlayerRef.current.unMute();
+                                ytPlayerRef.current.setVolume(volumeRef.current);
+                            }
+
+                            if (isPlayingRef.current) {
+                                ytPlayerRef.current.playVideo();
+                            } else {
+                                ytPlayerRef.current.pauseVideo();
+                            }
+
+                            checkAutoplayHealth();
+                        } catch (err) {
+                            console.warn('[Player] Erro ao carregar com loadVideoById:', err);
+                        }
+                    }
+                }
+            }, [currentTrack?.id, checkAutoplayHealth, roomCurrentTime]);
+
+            // INTEGRAÇÃO COM MEDIA SESSION API (Controles na tela de bloqueio e central de notificações)
+            useEffect(() => {
+                if (!('mediaSession' in navigator) || !currentTrack) return;
+
+                try {
+                    navigator.mediaSession.metadata = new MediaMetadata({
+                        title: currentTrack.title || 'Música ao Vivo',
+                        artist: roomDjName ? `DJ: ${roomDjName}` : 'VibeDJ',
+                        album: 'VibeDJ Cyber Edition',
+                        artwork: [
+                            { src: `https://img.youtube.com/vi/${currentTrack.id}/mqdefault.jpg`, sizes: '320x180', type: 'image/jpeg' },
+                            { src: `https://img.youtube.com/vi/${currentTrack.id}/hqdefault.jpg`, sizes: '480x360', type: 'image/jpeg' }
+                        ]
+                    });
+
+                    navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+
+                    navigator.mediaSession.setActionHandler('play', () => {
+                        unlockAudioContext();
+                        if (isCurrentDj) {
+                            socket.emit('dj_play');
+                        } else {
+                            ytPlayerRef.current?.playVideo();
+                        }
+                    });
+
+                    navigator.mediaSession.setActionHandler('pause', () => {
+                        if (isCurrentDj) {
+                            socket.emit('dj_pause');
+                        } else {
+                            ytPlayerRef.current?.pauseVideo();
+                        }
+                    });
+
+                    if (isCurrentDj) {
+                        navigator.mediaSession.setActionHandler('nexttrack', () => {
+                            socket.emit('skip_track');
+                        });
+                    } else {
+                        try { navigator.mediaSession.setActionHandler('nexttrack', null); } catch (e) {}
+                    }
+                } catch (e) {
+                    console.warn('[MediaSession] Erro ao configurar MediaSession:', e);
+                }
+            }, [currentTrack?.id, currentTrack?.title, isPlaying, isCurrentDj, roomDjName]);
+
+            // Limpeza geral ao desmontar
+            useEffect(() => {
+                return () => {
+                    if (autoplayTimerRef.current) clearTimeout(autoplayTimerRef.current);
+                    if (ytPlayerRef.current && typeof ytPlayerRef.current.destroy === 'function') {
+                        try { ytPlayerRef.current.destroy(); } catch (e) {}
                         ytPlayerRef.current = null;
+                        isReadyRef.current = false;
                     }
                 };
-            }, [currentTrack?.id, isCurrentDj]);
+            }, []);
 
-            // Desbloqueia áudio caso o navegador móvel restrinja autoplay
+            // Desbloqueia áudio ao toque do usuário (resgate do Safari/Chrome)
             const handleUnlockAudio = () => {
-                setAudioBlocked(false);
+                setAudioNeedsUnlock(false);
+                unlockAudioContext();
                 if (ytPlayerRef.current) {
                     try {
-                        if (!isMuted) {
-                            ytPlayerRef.current.unMute();
-                            ytPlayerRef.current.setVolume(volume);
-                        }
+                        ytPlayerRef.current.unMute();
+                        ytPlayerRef.current.setVolume(volumeRef.current);
                         ytPlayerRef.current.playVideo();
                         socket.emit('request_sync');
-                    } catch (e) {}
+                    } catch (e) {
+                        console.warn('[Audio] Erro ao desmutar áudio:', e);
+                    }
                 }
             };
 
@@ -281,10 +468,10 @@
 
             return (
                 <div className="relative w-full h-full">
-                    {/* Alvo do Player do YouTube */}
+                    {/* Alvo da YouTube IFrame API */}
                     <div ref={playerContainerRef} className="w-full h-full"></div>
 
-                    {/* CAMADA DE PROTEÇÃO CONTRA CLIQUES DE OUVINTES (Requisito 1) */}
+                    {/* CAMADA DE PROTEÇÃO CONTRA CLIQUES DE OUVINTES (Preserva o controle exclusivo do DJ) */}
                     {!isCurrentDj && (
                         <div
                             className="absolute inset-0 z-10 bg-transparent cursor-default select-none"
@@ -296,14 +483,15 @@
                         />
                     )}
 
-                    {/* Aviso de desbloqueio de áudio em celulares */}
-                    {audioBlocked && (
-                        <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/75 p-4">
+                    {/* BANNER FLUTUANTE DE RESGATE DE ÁUDIO NO MOBILE (Fallback de Autoplay) */}
+                    {audioNeedsUnlock && (
+                        <div className="absolute inset-x-0 bottom-4 z-30 flex justify-center px-4 animate-bounce pointer-events-auto">
                             <button
                                 onClick={handleUnlockAudio}
-                                className="bg-pink-600 hover:bg-pink-500 text-white font-bold py-2.5 px-5 rounded-xl shadow-lg shadow-pink-600/40 animate-pulse flex items-center gap-2 text-sm transition"
+                                className="bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-500 hover:to-rose-500 text-white font-black py-2.5 px-6 rounded-full shadow-2xl shadow-pink-600/60 border border-pink-400 flex items-center gap-2 text-xs sm:text-sm active:scale-95 transition"
                             >
-                                🔊 Toque para Ativar o Áudio da Sala
+                                <span className="text-base">🔇</span>
+                                <span>Toque para ativar o som</span>
                             </button>
                         </div>
                     )}
@@ -484,20 +672,30 @@
             }, []);
 
             // =========================================================================
-            // SINCRONIZAÇÃO EM TEMPO REAL: VISIBILITYCHANGE E FOCO DE TELA (Requisito 2)
+            // SINCRONIZAÇÃO EM TEMPO REAL: VISIBILITYCHANGE E PERSISTÊNCIA EM SEGUNDO PLANO
             // =========================================================================
             useEffect(() => {
                 const handleVisibilityChange = () => {
-                    // Quando o usuário volta ao browser após alternar para WhatsApp ou outro app
                     if (document.visibilityState === 'visible') {
-                        console.log('[Visibilidade] Usuário retornou à aba. Solicitando sincronização imediata...');
+                        console.log('[Visibilidade] Usuário retornou à aba. Solicitando ressincronização...');
                         socket.emit('request_sync');
+                        if (globalAudioCtx && globalAudioCtx.state === 'suspended') {
+                            globalAudioCtx.resume();
+                        }
+                    } else if (document.visibilityState === 'hidden') {
+                        console.log('[Visibilidade] Aba em segundo plano. Mantendo pipeline de áudio ativo...');
+                        if (globalAudioCtx && globalAudioCtx.state === 'suspended') {
+                            globalAudioCtx.resume();
+                        }
                     }
                 };
 
                 const handleWindowFocus = () => {
                     console.log('[Foco] Janela em foco. Solicitando ressincronização...');
                     socket.emit('request_sync');
+                    if (globalAudioCtx && globalAudioCtx.state === 'suspended') {
+                        globalAudioCtx.resume();
+                    }
                 };
 
                 document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -533,6 +731,9 @@
                 e.preventDefault();
                 const cleanName = nameInput.trim();
                 if (!cleanName) return;
+
+                // Desbloqueia sessão de áudio para o iOS Safari e Android Chrome com gesto do usuário
+                unlockAudioContext();
 
                 localStorage.setItem('vibedj_user_name', cleanName);
                 setUser({ name: cleanName, avatar: '🎧', id: socket.id });
@@ -694,9 +895,9 @@
                             />
                             <button
                                 type="submit"
-                                className="w-full bg-pink-600 hover:bg-pink-500 font-bold p-3 rounded-lg transition active:scale-95 shadow-lg shadow-pink-600/30"
+                                className="w-full bg-pink-600 hover:bg-pink-500 font-bold p-3 rounded-lg transition active:scale-95 shadow-lg shadow-pink-600/30 flex items-center justify-center gap-2"
                             >
-                                Entrar na Sala
+                                <span>🎧</span> Entrar na Sala e Ativar Áudio
                             </button>
                         </form>
 
@@ -776,6 +977,8 @@
                                     isCurrentDj={isCurrentDj}
                                     volume={volume}
                                     isMuted={isMuted}
+                                    roomDjName={roomState.currentDj?.name}
+                                    roomCurrentTime={roomState.currentTime}
                                     onTrackEnded={handleTrackEnded}
                                     onRegisterSync={handleRegisterSync}
                                 />

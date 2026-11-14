@@ -1,0 +1,57 @@
+
+> VibeDJ@1.0.0 test
+> node --test --test-concurrency=1 tests/*.test.cjs
+
+✔ HTTP baseline: unchanged HTML, local client, CORS, invalid audio IDs; two transports (1053.6567ms)
+✔ two clients: registration, queue/playlist rotation, snapshot, DJ controls and skip (464.7082ms)
+✔ distinct-name listener cannot mutate DJ controls or end an active DJ track (482.2376ms)
+✔ playlist update while playing, leaving queue, empty playlists and idle transition (450.3865ms)
+✔ empty DJ is skipped; updating an idle queue starts playback (475.9424ms)
+✔ votes are replaceable, keyed by participant ID and reset on track transition (469.39ms)
+✔ chat: session identity, trim/500 limit, strings and 100 history (490.5825ms)
+✔ A01/A07 fixed: same nickname has independent identity and cannot take DJ (461.7703ms)
+✔ KNOWN BASELINE A06: two DJ ended notifications advance two tracks (440.9681ms)
+✔ KNOWN BASELINE A04/A05: array items are not validated; full playlists are public (482.0603ms)
+✔ credentialed reconnect inside grace preserves identity, queue and playback (486.3019ms)
+✔ disconnect expiry after real 15s removes DJ and advances to next participant (15460.6529ms)
+✔ A06 authorization fixed: anonymous client cannot end with DJ absent after 10s (473.9228ms)
+✔ KNOWN BASELINE: numeric chat text crashes disposable server (not a passing safety check) (439.0387ms)
+✔ restart loses room state by current volatile contract (878.2476ms)
+✔ browser: no nickname-only auto-resume; explicit login stores credential only in session storage (1.3427ms)
+✔ browser: timeout retries same handshake; late/duplicate responses do not undo rotated credential (0.4564ms)
+✔ browser: disconnected rotation attempt retains retry ID for the next socket (0.1985ms)
+✔ browser: offline logout persists revocation tombstone and never exposes resumed DJ (0.996ms)
+✔ browser: logout while login is in flight revokes upon registration instead of displaying user (0.2169ms)
+✔ browser: invalid/replaced session returns to login; busy proof retained for explicit retry (0.2539ms)
+✔ browser: failed offline logout recovery after Render restart clears local session without a new login (0.1732ms)
+✔ browser: logout is sent while initial registration responses are lost, before timeout retries (0.1915ms)
+✔ browser: delayed logout event/ACK from A cannot clear the logout tombstone of B (0.2396ms)
+✔ session store: cryptographic opaque IDs/tokens; no credentials in public user (2.2762ms)
+✔ session store: rotation, same-request duplicate, simultaneous replay and old socket invalidation (0.4416ms)
+✔ session store: lost rotated response recoverable until confirmation or session expiry (0.4125ms)
+✔ session store: invalid, expired, revoked tokens; one cleanup callback; controlled renewal (0.3334ms)
+✔ server: same-name playlist ownership, votes and playlist notifications are independent (445.2491ms)
+✔ server: replacement disconnects old owner, rejects replay and keeps only one queue entry (461.0784ms)
+✔ server: simultaneous old-token attempts select one owner; no name takeover fallback (437.1867ms)
+✔ server: logout revokes token, removes DJ and advances once, repeated logout is harmless (440.1652ms)
+✔ server: no token in public events, logs, playlists or other-client registration stream (450.1349ms)
+✔ server: stale credentials after restart are rejected and explicit new login gets new identity (873.2496ms)
+✔ server: correlated logout during first registration revokes even before client knows participant ID (427.0635ms)
+✔ server: delayed logout targeting old identity cannot revoke a newer login on the same socket (425.645ms)
+✔ server: reconnect timer cannot remove resumed DJ after old 15s grace expires (15465.7583ms)
+✔ URL baseline: IDs, watch, short URLs, Shorts, live, embed and invalid input (1.0169ms)
+✔ time formatting preserves legacy rounding and invalid-value fallback (0.15ms)
+✔ room clock: idle, playing, paused, negative elapsed, legacy falsy startTime (3.2315ms)
+✔ logout UI delegates revocation to session client without deleting playlist/name/volume (0.6494ms)
+✔ KNOWN BASELINE A10: actual sync handler applies an obsolete track response (1.2244ms)
+✔ actual playlist handlers: arrows, boundary, drag/drop, removal and persistence (1.1582ms)
+✔ actual add-song handler: insert at top, noembed title (1.0607ms)
+✔ actual add-song handler: insert at top, noembed failure fallback (0.7637ms)
+ℹ tests 45
+ℹ suites 0
+ℹ pass 45
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 43227.2625

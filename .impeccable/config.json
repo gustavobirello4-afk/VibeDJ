@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "dark-glow",
+        "value": "*",
+        "files": [
+          "public/index.html"
+        ],
+        "createdAt": "2026-11-14T19:07:06.066Z",
+        "reason": "PR-01 user instruction requires visual equivalence and forbids redesign; existing neon glow CSS from PR-00 is intentionally preserved, not introduced by session security."
+      }
+    ]
+  }
+}

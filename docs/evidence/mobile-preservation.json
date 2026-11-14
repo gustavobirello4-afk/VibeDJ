@@ -1,0 +1,82 @@
+{
+  "date": "2026-11-14",
+  "before": {
+    "main": "b2fc55558e500ac51bd882a331379df064c2effb",
+    "files": {
+      "server.js": "a18470085300e51c25ba29e262463c119e7f6ebb277b3b17c1f6cea0b457b5b5",
+      "public/index.html": "602a0d236805b22322d00438098f2dec0602191be702e268fd05347d8aa0dd4c",
+      "package.json": "b5eda1f413fb24f1cb12fe8843e7b3e265e162e44c9a8461f7e396f7bd3acf36",
+      "package-lock.json": "d319782d244d426355a4d311620599f6a8f62138764398c5493ef2aa30c3d51a",
+      "VibeDJ_Plano_Modernizacao_Arquitetura.md": "165903a407db9b07024a5eda3a3a3b9c3d0dcd81ec4d6232d38ba5e457add966",
+      ".gitignore": "c88e22fde68db6cf1b469c6c26f6934ae1e45c72f6efd38e7124c6bad23945bf",
+      ".github/workflows/baseline.yml": "ef9602741f7f2a15b3faecc7218cdfb243220ada9271c4770814ab9520c4362b",
+      "tests/integration.test.cjs": "f444c6a34e22d9f0ed6bf5831034af42cdf8e83da0c73e94f5d2014c7fd42990",
+      "tests/unit.test.cjs": "da7d7b829756df5dc81aad94fd07405a274a15044e460ce0f7a70b1348d32688",
+      "tests/helpers\\baseline.cjs": "4bb18e015aafc240c637d26bda0afcf7e03a7af7a3b2adfa612f59e1e45c1c77",
+      "tests/helpers\\server-child.cjs": "75faf27ab8cb197558d6d74b57c6b886d4f133f13bc1310a95aa3c69fcb2e275"
+    }
+  },
+  "authorizedDocumentationChange": "VibeDJ_Plano_Modernizacao_Arquitetura.md",
+  "after": {
+    "main": "b2fc55558e500ac51bd882a331379df064c2effb",
+    "branch": "build/pr-00-baseline",
+    "results": {
+      "server.js": {
+        "before": "a18470085300e51c25ba29e262463c119e7f6ebb277b3b17c1f6cea0b457b5b5",
+        "after": "a18470085300e51c25ba29e262463c119e7f6ebb277b3b17c1f6cea0b457b5b5",
+        "unchanged": true
+      },
+      "public/index.html": {
+        "before": "602a0d236805b22322d00438098f2dec0602191be702e268fd05347d8aa0dd4c",
+        "after": "602a0d236805b22322d00438098f2dec0602191be702e268fd05347d8aa0dd4c",
+        "unchanged": true
+      },
+      "package.json": {
+        "before": "b5eda1f413fb24f1cb12fe8843e7b3e265e162e44c9a8461f7e396f7bd3acf36",
+        "after": "b5eda1f413fb24f1cb12fe8843e7b3e265e162e44c9a8461f7e396f7bd3acf36",
+        "unchanged": true
+      },
+      "package-lock.json": {
+        "before": "d319782d244d426355a4d311620599f6a8f62138764398c5493ef2aa30c3d51a",
+        "after": "d319782d244d426355a4d311620599f6a8f62138764398c5493ef2aa30c3d51a",
+        "unchanged": true
+      },
+      "VibeDJ_Plano_Modernizacao_Arquitetura.md": {
+        "before": "165903a407db9b07024a5eda3a3a3b9c3d0dcd81ec4d6232d38ba5e457add966",
+        "after": "42cd4a29a9f4751438a7e8b183d092f2f718d1bddfd3d46d38c965665ed4001d",
+        "unchanged": false
+      },
+      ".gitignore": {
+        "before": "c88e22fde68db6cf1b469c6c26f6934ae1e45c72f6efd38e7124c6bad23945bf",
+        "after": "c88e22fde68db6cf1b469c6c26f6934ae1e45c72f6efd38e7124c6bad23945bf",
+        "unchanged": true
+      },
+      ".github/workflows/baseline.yml": {
+        "before": "ef9602741f7f2a15b3faecc7218cdfb243220ada9271c4770814ab9520c4362b",
+        "after": "ef9602741f7f2a15b3faecc7218cdfb243220ada9271c4770814ab9520c4362b",
+        "unchanged": true
+      },
+      "tests/integration.test.cjs": {
+        "before": "f444c6a34e22d9f0ed6bf5831034af42cdf8e83da0c73e94f5d2014c7fd42990",
+        "after": "f444c6a34e22d9f0ed6bf5831034af42cdf8e83da0c73e94f5d2014c7fd42990",
+        "unchanged": true
+      },
+      "tests/unit.test.cjs": {
+        "before": "da7d7b829756df5dc81aad94fd07405a274a15044e460ce0f7a70b1348d32688",
+        "after": "da7d7b829756df5dc81aad94fd07405a274a15044e460ce0f7a70b1348d32688",
+        "unchanged": true
+      },
+      "tests/helpers\\baseline.cjs": {
+        "before": "4bb18e015aafc240c637d26bda0afcf7e03a7af7a3b2adfa612f59e1e45c1c77",
+        "after": "4bb18e015aafc240c637d26bda0afcf7e03a7af7a3b2adfa612f59e1e45c1c77",
+        "unchanged": true
+      },
+      "tests/helpers\\server-child.cjs": {
+        "before": "75faf27ab8cb197558d6d74b57c6b886d4f133f13bc1310a95aa3c69fcb2e275",
+        "after": "75faf27ab8cb197558d6d74b57c6b886d4f133f13bc1310a95aa3c69fcb2e275",
+        "unchanged": true
+      }
+    }
+  },
+  "result": "PASS: application, 23-test source tree, manifests, lockfile, workflow and main preserved; original plan is the authorized documentation change"
+}

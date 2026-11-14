@@ -1,0 +1,79 @@
+{
+  "date": "2026-11-14",
+  "environment": "Codex integrated browser, localhost",
+  "records": [
+    {
+      "videoId": "M7lc1UVf-VE",
+      "action": "pause",
+      "state": {
+        "currentTime": 33.047037,
+        "duration": 1343.661,
+        "muted": false,
+        "paused": true,
+        "readyState": 4
+      }
+    },
+    {
+      "videoId": "M7lc1UVf-VE",
+      "action": "play",
+      "state": {
+        "currentTime": 33.430361,
+        "duration": 1343.661,
+        "muted": false,
+        "paused": false,
+        "readyState": 4
+      }
+    },
+    {
+      "videoId": "dQw4w9WgXcQ",
+      "action": "skip-from-official",
+      "snapshot": "- banner:\n  - generic: 🎧 VIBEDJ\n  - generic: Online\n  - generic: Baseline Bob (DJ da Vez)\n  - button \"Sair\"\n- iframe [id=\"yt-player-target\"]:\n  - generic \"Player de vídeo do YouTube\"\n  - dialog \"Este vídeo não está disponível\":\n    - img \"Logotipo do YouTube\"\n    - generic: Este vídeo não está disponível\n    - link \"Assistir no YouTube\":\n      - /url: http://www.youtube.com/watch?v=dQw4w9WgXcQ\n      - generic: Assistir no YouTube\n- button \"🔇 Toque para ativar o som\":\n  - generic: 🔇\n  - generic: Toque para ativar o som\n- paragraph: Tocando Agora\n- generic: Ao Vivo\n- paragraph: Rick Astley - Never Gonna Give You Up (Official Video) (4K Remaster)\n- paragraph: \"DJ: Baseline Bob\"\n- button \"⏸️ Pausar\"\n- button \"⏭️ Pular\" [active]\n- button \"🔊\"\n- 'slider \"Volume: 100%\"': \"100\"\n- generic: 100%\n- button \"👍 Woot (0)\"\n- button \"👎 Meh (0)\"\n- heading \"🎵 Minhas Músicas (2)\" [level=3]\n- textbox \"Cole link do YouTube ou Shorts...\"\n- button \"Add\"\n- generic \"Clique e arraste para reordenar\": ⠿\n- generic \"Próxima faixa a tocar quando chegar sua vez\": 1º Topo\n- 'generic \"YouTube Developers Live: Embedded Web Player Customization\"'\n- button \"▲\" [disabled]\n- button \"▼\"\n- button \"✕\"\n- generic \"Clique e arraste para reordenar\": ⠿\n- generic: \"2.\"\n- generic \"Rick Astley - Never Gonna Give You Up (Official Video) (4K Remaster)\"\n- button \"▲\"\n- button \"▼\" [disabled]\n- button \"✕\"\n- heading \"🎧 Fila de DJs (1)\" [level=3]\n- button \"Sair da Fila\"\n- generic: 🎧\n- generic: 1. Baseline Bob\n- generic: (Você)\n- generic: 2 músicas\n- heading \"💬 Chat da Sala\" [level=2]\n- generic: 0 mensagens\n- paragraph: Diga olá para a galera da sala! 👋\n- textbox \"Digite sua mensagem...\"\n- button \"Enviar\""
+    },
+    {
+      "videoId": "M7lc1UVf-VE",
+      "action": "skip-back",
+      "state": {
+        "currentTime": 0.044541,
+        "duration": 1343.661,
+        "muted": false,
+        "paused": false,
+        "readyState": 4
+      }
+    },
+    {
+      "videoId": "M7lc1UVf-VE",
+      "action": "later-after-skip-back-banner-disappeared",
+      "state": {
+        "currentTime": 27.259161,
+        "duration": 1343.661,
+        "muted": false,
+        "paused": false,
+        "readyState": 4
+      }
+    }
+  ],
+  "warnings": [
+    {
+      "level": "warn",
+      "message": "cdn.tailwindcss.com should not be used in production. To use Tailwind CSS in production, install it as a PostCSS plugin or use the Tailwind CLI: https://tailwindcss.com/docs/installation",
+      "timestamp": "2026-11-14T18:08:49.278Z",
+      "url": "https://cdn.tailwindcss.com/"
+    },
+    {
+      "level": "warn",
+      "message": "You are using the in-browser Babel transformer. Be sure to precompile your scripts for production - https://babeljs.io/docs/setup/",
+      "timestamp": "2026-11-14T18:08:49.341Z",
+      "url": "https://unpkg.com/@babel/standalone/babel.min.js"
+    },
+    {
+      "level": "warn",
+      "message": "[Player] Erro no player do YouTube: Object",
+      "timestamp": "2026-11-14T18:10:13.774Z"
+    },
+    {
+      "level": "warn",
+      "message": "[Autoplay] Restrição móvel detectada. Aplicando fallback automático: mutando e forçando play.",
+      "timestamp": "2026-11-14T18:10:14.768Z"
+    }
+  ]
+}

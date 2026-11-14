@@ -52,6 +52,7 @@
 
 <body>
     <div id="root"></div>
+    <script src="/session-client.js"></script>
 
     <script type="text/babel">
         const { useState, useEffect, useRef, useCallback } = React;
@@ -505,6 +506,32 @@
         function App() {
             const [isConnected, setIsConnected] = useState(socket.connected);
             const [user, setUser] = useState(null);
+            const [sessionNotice, setSessionNotice] = useState('');
+            const sessionClientRef = useRef(null);
+            if (!sessionClientRef.current) {
+                sessionClientRef.current = VibeSession.create({
+                    socket, storage: {
+                        getItem: key => window.sessionStorage.getItem(key),
+                        setItem: (key, value) => window.sessionStorage.setItem(key, value),
+                        removeItem: key => window.sessionStorage.removeItem(key)
+                    },
+                    onUser: (u) => {
+                        setUser(u);
+                        if (u) {
+                            localStorage.setItem('vibedj_user_name', u.name);
+                            setSessionNotice('');
+                        }
+                    },
+                    onInvalid: (reason) => setSessionNotice({
+                        replaced: 'Esta sessão foi retomada em outra conexão. Entre novamente para criar uma nova identidade.',
+                        expired: 'Sua sessão expirou. Entre novamente.',
+                        invalid_session: 'Não foi possível retomar a sessão. Entre novamente; sua playlist foi preservada.',
+                        session_busy: 'Uma conexão ainda está retomando esta sessão. Aguarde e tente novamente.',
+                        logout_pending: 'A saída será confirmada quando a conexão voltar.',
+                        connection: 'Sem confirmação de conexão. Tente entrar novamente.'
+                    }[reason] || 'Não foi possível recuperar a sessão. Entre novamente.')
+                });
+            }
             const [nameInput, setNameInput] = useState('');
             const [roomState, setRoomState] = useState({ djQueue: [], messages: [], votes: { woot: 0, meh: 0 }, isPlaying: false, currentTime: 0 });
             const [inputMsg, setInputMsg] = useState('');
@@ -553,7 +580,7 @@
                 if (savedName) setNameInput(savedName);
 
                 try {
-                    const savedPlaylist = localStorage.getItem('vibedj_playlist');
+                    const savedPlaylist = localStorage.getItem(sessionClientRef.current.playlistKey()) || localStorage.getItem('vibedj_playlist');
                     if (savedPlaylist) {
                         const parsed = JSON.parse(savedPlaylist);
                         if (Array.isArray(parsed)) setPlaylist(parsed);
@@ -569,17 +596,14 @@
                     console.log('[VibeDJ] Conectado ao servidor! Socket ID:', socket.id);
                     setIsConnected(true);
 
-                    // Reautentica automaticamente na reconexão
-                    const savedName = localStorage.getItem('vibedj_user_name');
-                    if (savedName) {
-                        socket.emit('set_user', { name: savedName, avatar: '🎧' });
-                    }
+                    sessionClientRef.current.connect();
                     socket.emit('request_sync');
                 };
 
                 const onDisconnect = (reason) => {
                     console.warn('[VibeDJ] Desconectado do servidor:', reason);
                     setIsConnected(false);
+                    sessionClientRef.current.disconnected();
                 };
 
                 const onConnectError = (error) => {
@@ -610,9 +634,11 @@
                 };
 
                 const onUserRegistered = (u) => {
-                    setUser(u);
-                    localStorage.setItem('vibedj_user_name', u.name);
+                    sessionClientRef.current.accept(u);
                 };
+                const onSessionError = (error) => sessionClientRef.current.error(error);
+                const onSessionInvalid = (error) => sessionClientRef.current.invalid(error);
+                const onLoggedOut = (result) => sessionClientRef.current.loggedOut(result);
 
                 // Resposta de sincronização recebida do servidor
                 const onSyncTime = (data) => {
@@ -636,7 +662,7 @@
                     console.log('[Playlist] Faixa consumida pela mesa. Nova playlist:', updatedPlaylist);
                     if (Array.isArray(updatedPlaylist)) {
                         setPlaylist(updatedPlaylist);
-                        localStorage.setItem('vibedj_playlist', JSON.stringify(updatedPlaylist));
+                        localStorage.setItem(sessionClientRef.current.playlistKey(), JSON.stringify(updatedPlaylist));
                     }
                 };
 
@@ -648,6 +674,9 @@
                 socket.on('update_votes', onUpdateVotes);
                 socket.on('new_message', onNewMessage);
                 socket.on('user_registered', onUserRegistered);
+                socket.on('session_error', onSessionError);
+                socket.on('session_invalid', onSessionInvalid);
+                socket.on('logged_out', onLoggedOut);
                 socket.on('sync_time', onSyncTime);
                 socket.on('player_action', onPlayerAction);
                 socket.on('playlist_consumed', onPlaylistConsumed);
@@ -665,6 +694,9 @@
                     socket.off('update_votes', onUpdateVotes);
                     socket.off('new_message', onNewMessage);
                     socket.off('user_registered', onUserRegistered);
+                    socket.off('session_error', onSessionError);
+                    socket.off('session_invalid', onSessionInvalid);
+                    socket.off('logged_out', onLoggedOut);
                     socket.off('sync_time', onSyncTime);
                     socket.off('player_action', onPlayerAction);
                     socket.off('playlist_consumed', onPlaylistConsumed);
@@ -736,13 +768,11 @@
                 unlockAudioContext();
 
                 localStorage.setItem('vibedj_user_name', cleanName);
-                setUser({ name: cleanName, avatar: '🎧', id: socket.id });
-                socket.emit('set_user', { name: cleanName, avatar: '🎧' });
+                sessionClientRef.current.login(cleanName);
             };
 
             const handleLogout = () => {
-                localStorage.removeItem('vibedj_user_name');
-                setUser(null);
+                sessionClientRef.current.logout();
             };
 
             const handleSendMessage = (e) => {
@@ -786,7 +816,7 @@
                 // Insere diretamente na PRIMEIRA posição (índice 0 / Topo da lista)
                 const newPlaylist = [{ id: videoId, title }, ...playlist];
                 setPlaylist(newPlaylist);
-                localStorage.setItem('vibedj_playlist', JSON.stringify(newPlaylist));
+                localStorage.setItem(sessionClientRef.current.playlistKey(), JSON.stringify(newPlaylist));
                 socket.emit('update_playlist', newPlaylist);
                 setVideoUrl('');
             };
@@ -801,7 +831,7 @@
                 newPlaylist.splice(targetIndex, 0, moved);
 
                 setPlaylist(newPlaylist);
-                localStorage.setItem('vibedj_playlist', JSON.stringify(newPlaylist));
+                localStorage.setItem(sessionClientRef.current.playlistKey(), JSON.stringify(newPlaylist));
                 socket.emit('update_playlist', newPlaylist);
             };
 
@@ -835,7 +865,7 @@
                 newPlaylist.splice(targetIndex, 0, moved);
 
                 setPlaylist(newPlaylist);
-                localStorage.setItem('vibedj_playlist', JSON.stringify(newPlaylist));
+                localStorage.setItem(sessionClientRef.current.playlistKey(), JSON.stringify(newPlaylist));
                 socket.emit('update_playlist', newPlaylist);
 
                 setDraggedIndex(null);
@@ -850,7 +880,7 @@
             const handleRemoveSong = (indexToRemove) => {
                 const newPlaylist = playlist.filter((_, idx) => idx !== indexToRemove);
                 setPlaylist(newPlaylist);
-                localStorage.setItem('vibedj_playlist', JSON.stringify(newPlaylist));
+                localStorage.setItem(sessionClientRef.current.playlistKey(), JSON.stringify(newPlaylist));
                 socket.emit('update_playlist', newPlaylist);
             };
 
@@ -884,6 +914,7 @@
                             <div className="text-4xl mb-2">🎧</div>
                             <h1 className="text-3xl font-black text-pink-500 mb-1 tracking-wider">VIBEDJ</h1>
                             <p className="text-xs text-gray-400 mb-6">Música em sincronia com seus amigos</p>
+                            {sessionNotice && <p role="status" className="text-xs text-amber-400 mb-4">{sessionNotice}</p>}
 
                             <input
                                 type="text"
@@ -910,8 +941,8 @@
                 );
             }
 
-            const isDjInQueue = roomState.djQueue.some(dj => dj.name === user.name || dj.id === user.id);
-            const isCurrentDj = (roomState.currentDj?.name === user.name) || (roomState.currentDj?.id === user.id);
+            const isDjInQueue = roomState.djQueue.some(dj => dj.id === user.id);
+            const isCurrentDj = roomState.currentDj?.id === user.id;
 
             return (
                 <div className="flex flex-col h-screen bg-gray-950 text-white overflow-hidden">
@@ -1230,13 +1261,13 @@
                                                 <div
                                                     key={idx}
                                                     className={`p-2 rounded-lg text-xs flex justify-between items-center ${
-                                                        dj.name === user.name ? 'bg-cyan-950/60 border border-cyan-800/60' : 'bg-gray-800'
+                                                        dj.id === user.id ? 'bg-cyan-950/60 border border-cyan-800/60' : 'bg-gray-800'
                                                     }`}
                                                 >
                                                     <span className="font-medium flex items-center gap-1.5">
                                                         <span>{dj.avatar || '🎧'}</span>
                                                         <span>{idx + 1}. {dj.name}</span>
-                                                        {dj.name === user.name && <span className="text-[10px] text-cyan-400 font-bold">(Você)</span>}
+                                                        {dj.id === user.id && <span className="text-[10px] text-cyan-400 font-bold">(Você)</span>}
                                                     </span>
                                                     <span className="text-gray-400 text-[11px]">{dj.playlist?.length || 0} músicas</span>
                                                 </div>

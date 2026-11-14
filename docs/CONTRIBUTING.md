@@ -75,3 +75,19 @@ de publicação; qualquer mudança em configuração externa deve ser autorizada
 Não realizar merge experimental para descobrir se há deploy. Ausência de um
 arquivo de configuração local ou de um job Actions não comprova ausência de
 automação externa.
+
+### Atualização específica do PR-00: riscos aceitos em desenvolvimento
+
+Em 14/11/2026, o usuário transmitiu a confirmação do responsável pelo
+desenvolvimento: hospedagem na Render, aplicação em desenvolvimento/testes,
+reinicializações temporárias e perda do estado volátil das salas aceitas;
+auto-deploy não precisa ser desativado. A verificação de automações externas
+passa a ser **informativa, não bloqueante para push/abertura do PR-00**.
+Essa atualização substitui o bloqueio de abertura anterior, sem transformar
+configurações não inspecionadas em verificadas. Ver o [gate atualizado](PR_00_GATE.md).
+
+Push, abertura de PR e merge continuam exigindo suas autorizações explícitas;
+revisão do mantenedor e verificações pré-merge permanecem. O aceite não autoriza
+alterar configurações externas nem dispensa requisitos de segurança, transição,
+rollback ou homologação de mudanças funcionais. Não aplicar essa aceitação de
+desenvolvimento como aprovação genérica de uma futura produção.

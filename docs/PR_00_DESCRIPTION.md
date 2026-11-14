@@ -3,7 +3,7 @@
 > Rascunho local de título e corpo. Não foi criado PR.
 > Head proposto: `weszzy:build/pr-00-baseline`.
 > Destino proposto: `gustavobirello4-afk/VibeDJ:main`.
-> Gate de publicação: BLOCKED até verificar automações de push/PR e obter autorização.
+> Gate de prontidão: READY; execução de push/abertura aguarda autorização explícita.
 
 ## Objetivo
 
@@ -34,7 +34,8 @@ Os únicos efeitos operacionais novos são os artefatos de validação e a CI.
 
 - `npm ci`: PASS no ambiente local registrado.
 - `npm test`: **23/23 PASS**, sem skipped/todo/cancelled, Windows/Node 24.18.0/
-  npm 11.16.0. Logs em `docs/evidence/`; última execução pré-commit ~23,38s.
+  npm 11.16.0. Repetição no fechamento READY: ~23,88s, log em
+  `docs/evidence/pr-00-ready-tests.txt`.
 - Diff e invariantes de arquivos da aplicação/scripts/runtime/lockfile conferidos.
 - Vídeo oficial `M7lc1UVf-VE` reproduziu no integrado, com avanço, pausa, retomada
   e troca de faixa; estado real do vídeo capturado. Outra faixa continuou
@@ -57,18 +58,24 @@ O iframe ficou com altura inferior a 200px em 320/360px e no cenário horizontal
 não houve correção de layout neste PR. Extração/background preexistentes não
 foram ampliados nem aprovados. Ver `docs/REGRESSION_MATRIX.md`.
 
-As consultas acessíveis não identificaram workflows/deployments na base remota,
-mas apps, hooks do upstream e hospedagem não foram verificados integralmente.
-Ausência de workflow **não** comprova ausência de deploy automático.
+As consultas acessíveis não identificaram workflows/deployments na base remota;
+apps, hooks do upstream e detalhes dos gatilhos não foram verificados integralmente.
+O responsável confirmou a hospedagem na **Render**, em desenvolvimento/testes,
+e aceitou reinicializações temporárias e perda do estado volátil das salas.
+Não é necessário desativar auto-deploy. Verificações de automações externas são
+informativas e não bloqueiam a abertura deste PR. Ausência de workflow continua
+sem comprovar ausência de deploy automático.
 
 - Push pode disparar CI e automações de branch/preview no fork.
 - Abrir PR, inclusive draft, pode disparar CI ou preview externo.
 - Merge pode disparar produção e restart, desconectar sockets e perder a sala
   em memória. Merge não constitui autorização de deploy.
 
-Ver `docs/PR_00_GATE.md` para resultados, permissões ausentes e responsáveis.
-Solicitar revisão do mantenedor antes de integrar. Confirmar efeitos de push/PR
-antes da publicação e verificar auto-deploy de `main` antes do primeiro merge.
+Ver `docs/PR_00_GATE.md` para resultados, aceite e pendências informativas.
+Push/abertura dependem de autorização explícita, ainda não concedida. Solicitar
+revisão do mantenedor antes de integrar e manter verificações pré-merge da
+política; não há exigência de desativar auto-deploy. O aceite operacional não
+homologa segurança, funcionalidades ou Android nem autoriza merge.
 
 ## Rollback e continuidade
 

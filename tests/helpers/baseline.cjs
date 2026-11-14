@@ -82,16 +82,16 @@ async function startServer(t) {
 async function command(socket, event, payload) {
     // request_sync follows the command on the same connection. Its reply is an
     // ordering barrier, avoiding arbitrary sleeps when testing rejected actions.
-    socket.emit(event, payload);
     const response = waitFor(socket, 'sync_time');
+    if (event !== 'request_sync') socket.emit(event, payload);
     socket.emit('request_sync');
     return response;
 }
 
-async function register(socket, name) {
+async function register(socket, name, credentials = {}) {
     const registered = waitFor(socket, 'user_registered');
     const updated = waitFor(socket, 'update_room');
-    socket.emit('set_user', { name, avatar: '🎧' });
+    socket.emit('set_user', { name, avatar: '🎧', ...credentials });
     const [user] = await Promise.all([registered, updated]);
     return user;
 }

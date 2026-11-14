@@ -33,8 +33,9 @@ test('two clients: registration, queue/playlist rotation, snapshot, DJ controls 
     const { socket: b } = await app.connect();
     const user = await register(a, '  Alice  ');
     assert.equal(user.name, 'Alice');
-    assert.equal(user.id, a.id);
-    await register(b, 'Bob');
+    assert.notEqual(user.id, a.id);
+    assert.equal(user.id, user.participantId);
+    const bob = await register(b, 'Bob');
     const consumed = waitFor(a, 'playlist_consumed');
     const remote = waitFor(b, 'update_room', s => s.currentTrack?.id === tracks()[0].id);
     const state = await queue(a, tracks());
@@ -116,18 +117,18 @@ test('empty DJ is skipped; updating an idle queue starts playback', async t => {
     assert.equal((await started).currentTrack.id, tracks()[1].id);
 });
 
-test('votes are replaceable, exposed by name and reset on track transition', async t => {
+test('votes are replaceable, keyed by participant ID and reset on track transition', async t => {
     const app = await startServer(t);
     const { socket: a } = await app.connect();
     const { socket: b } = await app.connect();
     await register(a, 'Alice');
-    await register(b, 'Bob');
+    const bob = await register(b, 'Bob');
     await queue(a, tracks());
     for (const type of ['woot', 'meh', 'unknown']) {
         const votes = waitFor(a, 'update_votes');
         await command(b, 'vote', type);
         const result = await votes;
-        assert.equal(result.voters.Bob, type);
+        assert.equal(result.voters[bob.id], type);
         assert.equal(result.woot, type === 'woot' ? 1 : 0);
         assert.equal(result.meh, type === 'meh' ? 1 : 0);
     }
@@ -136,11 +137,12 @@ test('votes are replaceable, exposed by name and reset on track transition', asy
     assert.deepEqual((await reset).votes, { woot: 0, meh: 0, voters: {} });
 });
 
-test('chat: identity from registered session, trim/500 limit, string/anonymous payload, 100 history', async t => {
+test('chat: session identity, trim/500 limit, strings and 100 history', async t => {
     const app = await startServer(t);
     const { socket: a } = await app.connect();
     const { socket: b } = await app.connect();
     await register(a, 'Alice');
+    await register(b, 'Bob');
     let message = waitFor(b, 'new_message');
     await command(a, 'send_message', { text: ` ${'x'.repeat(600)} `, userName: 'Forged' });
     const msg = await message;
@@ -149,7 +151,7 @@ test('chat: identity from registered session, trim/500 limit, string/anonymous p
     assert.equal(typeof msg.id, 'string');
     message = waitFor(a, 'new_message');
     await command(b, 'send_message', { text: ' anonymous ', userName: 'Client supplied' });
-    assert.equal((await message).user, 'Client supplied');
+    assert.equal((await message).user, 'Bob');
     await command(a, 'send_message', '   ');
     for (let i = 0; i < 101; i++) a.emit('send_message', `message-${i}`);
     await command(a, 'request_sync');
@@ -159,16 +161,19 @@ test('chat: identity from registered session, trim/500 limit, string/anonymous p
     assert.equal(initial.messages[99].text, 'message-100');
 });
 
-test('KNOWN BASELINE A01/A07: same nickname takes DJ socket identity and can pause', async t => {
+test('A01/A07 fixed: same nickname has independent identity and cannot take DJ', async t => {
     const app = await startServer(t);
     const { socket: a } = await app.connect();
     const { socket: b } = await app.connect();
-    await register(a, 'Alice');
+    const alice = await register(a, 'Alice');
     await queue(a, tracks());
-    const takeover = waitFor(a, 'update_room', s => s.currentDj?.id === b.id);
-    await register(b, 'Alice');
-    assert.equal((await takeover).djQueue[0].id, b.id);
-    assert.equal((await command(b, 'dj_pause')).isPlaying, false);
+    const other = await register(b, 'Alice');
+    assert.notEqual(other.id, alice.id);
+    assert.equal((await command(b, 'dj_pause')).isPlaying, true);
+    const state = await queue(b, [tracks()[2]]);
+    assert.equal(state.currentDj.id, alice.id);
+    assert.equal(state.djQueue.length, 2);
+    assert.notDeepEqual(state.djQueue[0].playlist, state.djQueue[1].playlist);
 });
 
 test('KNOWN BASELINE A06: two DJ ended notifications advance two tracks', async t => {
@@ -200,19 +205,23 @@ test('KNOWN BASELINE A04/A05: array items are not validated; full playlists are 
     assert.equal(state.currentTrack.title.length, 2000);
 });
 
-test('reconnect by name inside grace period preserves playback and updates socket ID', async t => {
+test('credentialed reconnect inside grace preserves identity, queue and playback', async t => {
     const app = await startServer(t);
     const { socket: a } = await app.connect();
     const { socket: observer } = await app.connect();
-    await register(a, 'Alice');
+    const alice = await register(a, 'Alice');
     await queue(a, tracks());
     await command(a, 'dj_seek', 30);
     const closed = waitFor(a, 'disconnect');
     a.disconnect();
     await closed;
     const { socket: resumed } = await app.connect();
-    const updated = waitFor(observer, 'update_room', s => s.currentDj?.id === resumed.id);
-    await register(resumed, 'Alice');
+    const updated = waitFor(observer, 'update_room', s => s.currentDj?.id === alice.id);
+    const registered = await register(resumed, 'Alice', {
+        resumeToken: alice.resumeToken, resumeRequestId: 'reconnect-request-001'
+    });
+    assert.equal(registered.id, alice.id);
+    assert.notEqual(registered.resumeToken, alice.resumeToken);
     assert.equal((await updated).currentTrack.id, tracks()[0].id);
     assert.ok((await command(resumed, 'request_sync')).currentTime >= 30);
 });
@@ -221,7 +230,7 @@ test('disconnect expiry after real 15s removes DJ and advances to next participa
     const app = await startServer(t);
     const { socket: a } = await app.connect();
     const { socket: b } = await app.connect();
-    await register(a, 'Alice');
+    const alice = await register(a, 'Alice');
     await register(b, 'Bob');
     await queue(a, tracks());
     await queue(b, [tracks()[1]]);
@@ -229,9 +238,17 @@ test('disconnect expiry after real 15s removes DJ and advances to next participa
     a.disconnect();
     const state = await next;
     assert.equal(state.djQueue.some(dj => dj.name === 'Alice'), false);
+    const { socket: returned } = await app.connect();
+    const identity = await register(returned, 'Alice', {
+        resumeToken: alice.resumeToken, resumeRequestId: 'reconnect-after-grace-001'
+    });
+    assert.equal(identity.id, alice.id);
+    const { initial } = await app.connect();
+    assert.equal(initial.currentDj.name, 'Bob');
+    assert.equal(initial.djQueue.some(dj => dj.id === alice.id), false);
 });
 
-test('KNOWN BASELINE A06 fallback: anonymous client can end after 10s if DJ absent', async t => {
+test('A06 authorization fixed: anonymous client cannot end with DJ absent after 10s', async t => {
     const app = await startServer(t);
     const { socket: a } = await app.connect();
     const { socket: b } = await app.connect();
@@ -245,14 +262,14 @@ test('KNOWN BASELINE A06 fallback: anonymous client can end after 10s if DJ abse
         assert.ok(Date.now() < deadline, 'Server did not observe disconnect');
         await new Promise(resolve => setTimeout(resolve, 10));
     }
-    const advanced = waitFor(b, 'update_room', s => s.currentTrack?.id === tracks()[1].id);
-    await command(b, 'track_ended');
-    await advanced;
+    const state = await command(b, 'track_ended');
+    assert.equal(state.currentTrackId, tracks()[0].id);
 });
 
 test('KNOWN BASELINE: numeric chat text crashes disposable server (not a passing safety check)', { timeout: 10000 }, async t => {
     const app = await startServer(t);
     const { socket } = await app.connect();
+    await register(socket, 'Authenticated invalid payload');
     const exited = once(app.child, 'exit');
     socket.emit('send_message', { text: 42 });
     const [code] = await exited;

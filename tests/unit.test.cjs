@@ -54,18 +54,14 @@ test('room clock: idle, playing, paused, negative elapsed, legacy falsy startTim
     assert.equal(calculate({ currentTrack: {}, startTime: 0, isPlaying: true }), 0);
 });
 
-test('KNOWN BASELINE A09: actual logout clears local user only; emits no server command', () => {
-    const removed = [], emitted = [];
-    let user = { name: 'DJ' };
+test('logout UI delegates revocation to session client without deleting playlist/name/volume', () => {
+    let revoked = 0;
     const logout = vm.runInNewContext(
         `${extract(html, 'const handleLogout = () =>', '            ')}; handleLogout`,
-        { localStorage: { removeItem: key => removed.push(key) },
-            setUser: value => { user = value; }, socket: { emit: (...args) => emitted.push(args) } }
+        { sessionClientRef: { current: { logout() { revoked++; } } } }
     );
     logout();
-    assert.equal(user, null);
-    assert.deepEqual(removed, ['vibedj_user_name']);
-    assert.deepEqual(emitted, []);
+    assert.equal(revoked, 1);
 });
 
 test('KNOWN BASELINE A10: actual sync handler applies an obsolete track response', () => {
@@ -86,6 +82,7 @@ function playlistHarness(initial, extra = {}) {
         setPlaylist(value) { playlist = value; context.playlist = value; },
         localStorage: { setItem: (key, value) => saved.set(key, value) },
         socket: { emit: (...args) => emitted.push(args) },
+        sessionClientRef: { current: { playlistKey: () => 'vibedj_playlist' } },
         setDraggedIndex() {}, setDragOverIndex() {}, ...extra
     });
     return {

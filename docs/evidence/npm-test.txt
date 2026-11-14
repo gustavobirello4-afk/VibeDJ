@@ -1,0 +1,35 @@
+
+> VibeDJ@1.0.0 test
+> node --test --test-concurrency=1 tests/*.test.cjs
+
+✔ HTTP baseline: unchanged HTML, local client, CORS, invalid audio IDs; two transports (1204.86ms)
+✔ two clients: registration, queue/playlist rotation, snapshot, DJ controls and skip (602.2487ms)
+✔ distinct-name listener cannot mutate DJ controls or end an active DJ track (541.2519ms)
+✔ playlist update while playing, leaving queue, empty playlists and idle transition (522.2768ms)
+✔ empty DJ is skipped; updating an idle queue starts playback (535.454ms)
+✔ votes are replaceable, exposed by name and reset on track transition (575.3926ms)
+✔ chat: identity from registered session, trim/500 limit, string/anonymous payload, 100 history (570.7089ms)
+✔ KNOWN BASELINE A01/A07: same nickname takes DJ socket identity and can pause (491.7189ms)
+✔ KNOWN BASELINE A06: two DJ ended notifications advance two tracks (431.7704ms)
+✔ KNOWN BASELINE A04/A05: array items are not validated; full playlists are public (452.1866ms)
+✔ reconnect by name inside grace period preserves playback and updates socket ID (443.7509ms)
+✔ disconnect expiry after real 15s removes DJ and advances to next participant (15452.4293ms)
+✔ KNOWN BASELINE A06 fallback: anonymous client can end after 10s if DJ absent (432.5315ms)
+✔ KNOWN BASELINE: numeric chat text crashes disposable server (not a passing safety check) (477.8853ms)
+✔ restart loses room state by current volatile contract (927.8187ms)
+✔ URL baseline: IDs, watch, short URLs, Shorts, live, embed and invalid input (1.3521ms)
+✔ time formatting preserves legacy rounding and invalid-value fallback (0.2629ms)
+✔ room clock: idle, playing, paused, negative elapsed, legacy falsy startTime (4.5175ms)
+✔ KNOWN BASELINE A09: actual logout clears local user only; emits no server command (1.605ms)
+✔ KNOWN BASELINE A10: actual sync handler applies an obsolete track response (0.9399ms)
+✔ actual playlist handlers: arrows, boundary, drag/drop, removal and persistence (1.5353ms)
+✔ actual add-song handler: insert at top, noembed title (1.3814ms)
+✔ actual add-song handler: insert at top, noembed failure fallback (0.9012ms)
+ℹ tests 23
+ℹ suites 0
+ℹ pass 23
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 24288.8746

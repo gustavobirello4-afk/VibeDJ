@@ -2,7 +2,8 @@
 
 Protótipo de sala musical colaborativa: React no navegador, Express e Socket.IO
 em um processo Node. Há **uma sala global**, sem contas, banco ou isolamento por
-sala. Esta entrega prepara somente a Fase 0 do plano de modernização.
+sala. PR-00 estabeleceu a baseline; PR-01 acrescenta sessões anônimas em memória,
+identidade por participante e autorização de DJ independente do apelido.
 
 ## Diretriz obrigatória: mobile-first
 
@@ -70,6 +71,10 @@ Interrompa com Ctrl+C. Não há build, lint ou typecheck no protótipo.
 
 - `server.js`: HTTP, endpoints de áudio, sala em memória, fila circular, chat,
   votos, controle de reprodução e tolerância de desconexão de 15 segundos.
+- `session-store.js`: IDs/tokens criptográficos, rotação, revogação, dono único
+  por sessão e validade de 24 horas por inatividade, sem banco ou dependência nova.
+- `public/session-client.js`: credencial no `sessionStorage` da aba, retomada,
+  retry correlacionado e confirmação de logout, sem polling adicional.
 - `public/index.html`: JSX compilado no navegador por Babel; React/ReactDOM 18
   development, Tailwind CDN, Socket.IO CDN, YouTube IFrame API e noembed.
 - `package-lock.json`: trava Express 4.22.3, Socket.IO 4.8.4 e
@@ -86,19 +91,27 @@ Vite, TypeScript, Tailwind, Zod, Vitest, Playwright ou banco nesta etapa.
 Testes não consultam YouTube/noembed nem extraem mídia. Os testes de integração
 abrem portas efêmeras, usam o `server.js` real e encerram seus processos. Um caso
 documenta propositalmente o crash de chat numérico em processo descartável.
-Os testes `KNOWN BASELINE` confirmam defeitos existentes; verde **não** significa
+Os testes `KNOWN BASELINE` restantes confirmam defeitos existentes; verde **não** significa
 que esses defeitos foram corrigidos. CI configurada com `npm ci` e `npm test`,
-mas ainda não executada no GitHub.
+com resultado remoto a conferir antes de integrar cada PR.
 
 ## Limitações conhecidas
 
-Apelido funciona como identidade e permite assumir privilégios de outro DJ;
-logout limpa apenas o cliente; payloads não têm validação de domínio suficiente;
-chat malformado pode derrubar o processo; fim duplicado pode pular duas faixas.
-CORS é aberto. Não use este baseline como aprovação de publicação.
+Apelido é somente visual: nomes iguais têm IDs, filas, playlists e votos
+independentes. Token de retomada é privado e rotacionado; socket antigo perde
+autoridade. Logout revoga a sessão no servidor e preserva playlist/volume/nome
+salvo. Clientes sem token podem registrar identidade nova, nunca recuperar DJ
+pelo apelido. Veja [regras e limitações de sessões](docs/SESSIONS.md).
 
-Playlist, apelido e volume ficam no `localStorage` por origem/navegador, não por
-conta. A sala e o chat são perdidos no restart. A rede externa é necessária para
+Payloads ainda não têm validação de domínio suficiente; chat numérico de cliente
+autenticado pode derrubar o processo e fim duplicado pode pular duas faixas.
+CORS é aberto. Não use testes de caracterização como aprovação de segurança.
+
+Playlist fica no `localStorage` sob chave por participante; a playlist legada é
+preservada como semente local de migração. Apelido/volume continuam locais por
+origem. O token fica somente no `sessionStorage` da aba (ou memória se indisponível).
+A sala, o chat e as sessões são perdidos no restart da Render; o cliente volta
+ao login quando a credencial não puder ser retomada. A rede externa é necessária para
 CDNs, títulos e player. Os endpoints de extração de áudio continuam presentes,
 embora sem chamadores no frontend deste repositório; o buffer silencioso também
 continua presente. Conformidade de mídia requer revisão antes de publicação.

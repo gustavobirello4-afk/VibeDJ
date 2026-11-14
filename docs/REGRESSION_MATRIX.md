@@ -1,5 +1,41 @@
 # Matriz de regressão — Fase 0
 
+## Atualização funcional PR-01 (vigente)
+
+As tabelas da Fase 0 abaixo são históricas. PR-01 substitui os asserts dos
+defeitos corrigidos, mantendo a cobertura funcional; não mantém teste exigindo
+tomada de DJ, logout apenas local ou ENDED anônimo. Contrato atual em
+[SESSIONS.md](SESSIONS.md) e [SOCKET_PROTOCOL.md](SOCKET_PROTOCOL.md).
+Resultado final: **45/45 PASS**, 0 FAIL/skipped/todo/cancelled; os 23 casos
+anteriores adaptados + 22 novos, [log](evidence/pr-01-tests.txt).
+
+| Aceite PR-01 | Evidência automática atual |
+|---|---|
+| Homônimos independentes; DJ não usurpável | integração `A01/A07 fixed` e `same-name playlist ownership` |
+| Somente dono autorizado controla reprodução/fila/playlist/chat/voto | integração `distinct-name listener`, `replacement`, `logout revokes` |
+| Retomada legítima com rotação | `credentialed reconnect`; store e client de sessão |
+| Token inválido, expirado ou revogado | store com relógio controlado, logout/restart reais |
+| Socket antigo e tentativas concorrentes | integração `replacement`, `simultaneous old-token` |
+| Resposta perdida/duplicada e confirmação de token | store e controlador real em fixture, recuperação além de 60s |
+| Logout durante registro, offline e confirmação antiga | client e integrações `correlated logout`, `delayed logout` |
+| Grace de 15s antes/depois sem reinserção automática | integração real `disconnect expiry` + retomada após liberar fila |
+| Token não público nem em logs | integração `no token in public events` |
+| Sem fallback anônimo ENDED | integração `A06 authorization fixed` |
+
+Persistem fora do escopo: ENDED duplicado pelo DJ legítimo, sync obsoleto,
+snapshot amplo e itens inválidos, chat numérico autenticado causa crash,
+validação/CORS/anti-abuso, política de mídia e altura mínima do player. Esses
+testes KNOWN BASELINE continuam caracterização, não aceitação do defeito.
+
+Smoke integrado repetiu login isolado por aba, mesmo apelido sem controles do
+outro, reordenação isolada, reload com papel DJ preservado, pause e logout real.
+Capturas: [DJ retomado](evidence/pr-01-dj-resumed.jpg),
+[homônimo ouvinte a 390px](evidence/pr-01-same-name-listener-390.jpg).
+Android físico/iOS, troca real de redes e expiração de 24h em aparelho continuam
+PENDING. TTL é validado com relógio controlado, não com espera de 24h.
+
+## Registro histórico PR-00
+
 Data: 14/11/2026. Base: `b2fc55558e500ac51bd882a331379df064c2effb`.
 PASS significa resultado observado conforme baseline, não adequação ao alvo.
 KNOWN BASELINE identifica defeito reproduzido. BLOCKED é falta de ambiente ou

@@ -1,9 +1,54 @@
-# Protocolo legado e mapa de efeitos
+# Protocolo Socket.IO e mapa de efeitos
+
+## Contrato vigente após PR-01
+
+PR-01 depende de PR-00 (#1). Os nomes dos comandos legados são preservados;
+`id` agora significa ID opaco permanente durante a sessão, também publicado como
+`participantId`. Nunca significa socket ou apelido. Regras completas e cenários
+de recuperação em [SESSIONS.md](SESSIONS.md).
+
+| Comando | Contrato atual |
+|---|---|
+| `set_user` | Nova identidade: `{name,avatar?,resumeRequestId?}`. Nome trim/até 30; cliente legado sem token recebe nova sessão. Repetição no mesmo socket autenticado é idempotente. Retomada: `{resumeToken,resumeRequestId}`; credencial válida é obrigatória, nome recebido não troca identidade. Apenas um dono por sessão; substituído recebe `session_invalid(replaced)` e disconnect. |
+| `confirm_session` (novo) | `{resumeToken,resumeRequestId}`; somente o dono atual pode confirmar a persistência do token sucessor e eliminar a prova anterior de retry. Sem ACK, idempotente. |
+| `logout` (novo) | `{requestId?,participantId?,registrationRequestId?}`; revoga somente a sessão autorizada do socket e correspondente ao alvo quando correlacionado. Remove fila, avança uma vez se DJ. Mensagem antiga de outra identidade é rejeitada. Duplicação após revogação não avança novamente. |
+| `toggle_queue` | Playlist, somente sessão dona autorizada; entrada/saída por participantId, sem comparação de nome. Rotação e saída de fila legadas mantidas. |
+| `update_playlist` | Playlist, somente sua entrada na fila por participantId. Não altera playlist de homônimo. |
+| `dj_play`, `dj_pause`, `dj_seek`, `skip_track` | Somente sessão autorizada cujo participantId é DJ atual; sem fallback por nome/socket. Regras de play/tempo/seek legadas preservadas. |
+| `track_ended` | Somente DJ autorizado. Fallback anônimo eliminado; transição por timeout de desconexão permanece. Duplicação do DJ ainda pertence à fase de idempotência de reprodução. |
+| `vote` | Exige sessão autorizada, mapa por participantId. Tipos/limites de payload continuam assunto do PR-02; reset legado por faixa preservado. |
+| `send_message` | Exige sessão autorizada; nome/avatar vêm dessa sessão, campos de remetente do payload ignorados. String/objeto, trim/500 e histórico 100 preservados. Validação de text não-string ainda pendente PR-02. |
+| `request_sync` | Leitura pública, payload/tempo legados; se socket autorizado, conta como atividade. Não concede identidade/privilégio. |
+
+São 13 comandos de aplicação (11 legados + confirm/logout). Nenhuma sala nova.
+Eventos públicos `init_state`, `update_room`, `update_votes`, `new_message`,
+`player_action` e resposta pública `sync_time` conservam a forma legada, com IDs
+estáveis. Snapshot ainda contém playlists/votantes, mas **nenhuma credencial**.
+
+| Evento privado | Payload / efeito |
+|---|---|
+| `user_registered` | `{id,participantId,name,avatar,resumeToken,expiresAt,resumeRequestId}` só ao solicitante. ACK opcional de `set_user`: `{ok:true,user:mesmo_payload}`. Cliente separa credencial de user React e confirma sucessor após salvar. ACK/evento duplicados não criam outra identidade. |
+| `session_error` (novo) | `{code,resumeRequestId}`; erros `invalid_user`, `invalid_session`, `invalid_request`, `session_conflict`, `session_busy`. ACK opcional: `{ok:false,code}`. Não transforma token inválido em nova identidade automaticamente. |
+| `session_invalid` (novo) | `{reason}`: `replaced`, `expired` ou revogação. Cliente limpa credencial/identidade local e exibe aviso. Logout usa apenas resposta correlacionada, sem invalid genérico que atinja login posterior. |
+| `logged_out` (novo) | `{ok:true,requestId,participantId,registrationRequestId}`, também ACK de logout. Cliente ignora eventos/ACKs de tentativas antigas. Logout com alvo conflitante retorna ACK `{ok:false,code:'session_conflict'}`. |
+| `playlist_consumed` | Só ao socket dono atual da identidade, em rotação e retomada com fila ainda válida; nunca a todos com o mesmo apelido. |
+
+São 11 eventos de aplicação de saída (8 legados + 3 de sessão). Nenhum token é
+incluído em roomState, snapshot, broadcast ou log. `user_registered`/ACK e
+`confirm_session` transportam tokens somente na conexão privada autenticada.
+
+Disconnect: timer por participantId, 15s; retomada cancela timer com geração
+conferida, sem varrer sockets por nome. Após expirar, libera fila/posição; token
+ainda válido pode recuperar identidade, mas não a posição liberada. Uma limpeza
+de sessão a cada minuto remove expirados; sem banco, sem polling novo no cliente.
+
+## Baseline histórica PR-00 (não é o contrato vigente)
 
 Referência: `server.js` e `public/index.html`, base
 `b2fc55558e500ac51bd882a331379df064c2effb`, ambos preservados no PR-00.
-Todas as linhas abaixo são 1-based nesses arquivos. Este documento descreve o
-protocolo **existente**, não os contratos `room:*` propostos para o futuro.
+Todas as linhas abaixo são 1-based na base PR-00. O mapa abaixo registra o legado
+para comparação; diferenças de identidade/logout são substituídas pelo contrato
+PR-01 acima. Contratos `room:*` do plano continuam propostas futuras.
 
 ## Transporte e estado
 
